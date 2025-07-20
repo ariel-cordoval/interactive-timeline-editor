@@ -413,30 +413,24 @@ function GroupTrackRow({
               ${isBeingDragged ? 'opacity-80 scale-[0.98]' : ''}
             `}
             style={{ width: `${groupWidth}px` }}
-            onClick={(e) => {
-              // Handle clicks anywhere in the group container (draggable or not)
-              // The specific click handlers on header elements will handle their own logic
-              if (!(e.target as HTMLElement).closest('button')) {
-                e.stopPropagation();
-                onGroupClick(group.id, e);
-              }
-            }}
-            onMouseDown={(e) => {
-              // Allow drag handlers to manage their own events
-              if (!(e.target as HTMLElement).closest('[data-draggable]')) {
-                e.stopPropagation();
-              }
-            }}
             data-group-id={group.id}
           >
-            {/* Header Area - Draggable (exactly like TimelineClip) */}
+            {/* Header Area - Clickable for selection + Draggable */}
             <div
               className={`
                 relative bg-[#2b2b2b] hover:bg-[#333333] transition-colors duration-150
                 ${isBeingDragged ? 'cursor-grabbing' : 'cursor-grab'}
               `}
               data-draggable="true"
-
+              onClick={(e) => {
+                // Handle group selection on header click
+                if (!(e.target as HTMLElement).closest('button')) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log('👆 Group header clicked - selecting group:', group.id);
+                  onGroupClick(group.id, e);
+                }
+              }}
               onMouseDown={(e) => {
                 // Don't drag if clicking on the expand button
                 if ((e.target as HTMLElement).closest('button')) {
@@ -639,7 +633,9 @@ function GroupTrackRow({
             <div 
               className="absolute inset-0 cursor-pointer hover:bg-[#2b2b2b] transition-colors"
               onClick={(e) => {
+                e.preventDefault();
                 e.stopPropagation();
+                console.log('👆 Expanded group header clicked - selecting group:', group.id);
                 onGroupClick(group.id, e);
               }}
               title="Click to select entire group"
@@ -2603,9 +2599,140 @@ export default function InteractiveTrackEditor({
     
     if (selectedGroups.length > 0) {
       console.log(`✂️ Group split at ${splitTime.toFixed(2)}s - splitting ${selectedGroups.length} collapsed group(s)`);
-    } else {
-      console.log(`✂️ Split at ${splitTime.toFixed(2)}s`);
+      
+      // Handle group splits
+      setTimelineState((prev) => {
+        const newGroups = [...prev.groups];
+        const updatedTracks = prev.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.flatMap((clip) => {
+            if (!prev.selectedClips.includes(clip.id)) {
+              return clip;
+            }
+
+            // Find the group this clip belongs to
+            const group = prev.groups.find(g => g.id === clip.groupId);
+            if (!group || !group.collapsed) {
+              // Not in a collapsed group, handle normally
+              if (splitTime <= clip.startTime || splitTime >= clip.endTime) {
+                return clip;
+              }
+
+              const firstPart: TimelineClip = {
+                ...clip,
+                id: `${clip.id}-first-${Date.now()}`,
+                endTime: splitTime,
+                duration: splitTime - clip.startTime,
+                selected: false,
+                waveformData: clip.waveformData,
+                waveformColor: clip.waveformColor,
+              };
+
+              const secondPart: TimelineClip = {
+                ...clip,
+                id: `${clip.id}-second-${Date.now()}`,
+                startTime: splitTime,
+                duration: clip.endTime - splitTime,
+                selected: false,
+                waveformData: clip.waveformData,
+                waveformColor: clip.waveformColor,
+              };
+
+              return [firstPart, secondPart];
+            }
+
+            // This clip is in a collapsed group - handle group split
+            if (splitTime <= clip.startTime || splitTime >= clip.endTime) {
+              return clip;
+            }
+
+            const timestamp = Date.now() + Math.random() * 1000; // Ensure unique IDs
+
+            const firstPart: TimelineClip = {
+              ...clip,
+              id: `${clip.id}-first-${timestamp}`,
+              endTime: splitTime,
+              duration: splitTime - clip.startTime,
+              selected: false,
+              waveformData: clip.waveformData,
+              waveformColor: clip.waveformColor,
+              groupId: `${group.id}-first-${timestamp}`, // New group for first part
+            };
+
+            const secondPart: TimelineClip = {
+              ...clip,
+              id: `${clip.id}-second-${timestamp}`,
+              startTime: splitTime,
+              duration: clip.endTime - splitTime,
+              selected: true, // Select the second part
+              waveformData: clip.waveformData,
+              waveformColor: clip.waveformColor,
+              groupId: `${group.id}-second-${timestamp}`, // New group for second part
+            };
+
+            // Create new groups for the split parts
+            const firstGroupExists = newGroups.some(g => g.id === firstPart.groupId);
+            const secondGroupExists = newGroups.some(g => g.id === secondPart.groupId);
+
+            if (!firstGroupExists) {
+              newGroups.push({
+                id: firstPart.groupId!,
+                name: `${group.name} (1)`,
+                clipIds: [], // Will be populated after all clips are processed
+                collapsed: group.collapsed,
+                color: group.color,
+                trackId: group.trackId,
+              });
+            }
+
+            if (!secondGroupExists) {
+              newGroups.push({
+                id: secondPart.groupId!,
+                name: `${group.name} (2)`,
+                clipIds: [], // Will be populated after all clips are processed
+                collapsed: group.collapsed,
+                color: group.color,
+                trackId: group.trackId,
+              });
+            }
+
+            return [firstPart, secondPart];
+          }),
+        }));
+
+        // Update group clipIds after all clips have been processed
+        const allClips = updatedTracks.flatMap(track => track.clips);
+        const finalGroups = newGroups.map(group => ({
+          ...group,
+          clipIds: allClips
+            .filter(clip => clip.groupId === group.id)
+            .map(clip => clip.id)
+        })).filter(group => group.clipIds.length > 0); // Remove empty groups
+
+        // Select clips from the second part of split groups
+        const newSelectedClips = allClips
+          .filter(clip => clip.selected)
+          .map(clip => clip.id);
+
+        // Recalculate timeline duration
+        const newDuration = calculateTimelineDuration(updatedTracks);
+
+        console.log(`✅ Group split complete: created ${finalGroups.length - prev.groups.length} new groups`);
+
+        return {
+          ...prev,
+          tracks: updatedTracks,
+          groups: finalGroups,
+          selectedClips: newSelectedClips,
+          totalDuration: newDuration,
+        };
+      });
+      
+      return;
     }
+    
+    // Regular clip split (not in collapsed groups)
+    console.log(`✂️ Regular split at ${splitTime.toFixed(2)}s`);
 
     setTimelineState((prev) => {
       const updatedTracks = prev.tracks.map((track) => ({
@@ -2635,7 +2762,7 @@ export default function InteractiveTrackEditor({
             id: `${clip.id}-second-${Date.now()}`,
             startTime: splitTime,
             duration: clip.endTime - splitTime,
-            selected: false,
+            selected: true,
             waveformData: clip.waveformData,
             waveformColor: clip.waveformColor,
           };
@@ -2647,14 +2774,20 @@ export default function InteractiveTrackEditor({
       // Recalculate timeline duration
       const newDuration = calculateTimelineDuration(updatedTracks);
 
+      // Select the second parts of split clips
+      const newSelectedClips = updatedTracks
+        .flatMap(track => track.clips)
+        .filter(clip => clip.selected)
+        .map(clip => clip.id);
+
       return {
         ...prev,
         tracks: updatedTracks,
-        selectedClips: [], // Clear selection after split
+        selectedClips: newSelectedClips,
         totalDuration: newDuration,
       };
     });
-  }, [rangeSelection, timelineState.selectedClips, timelineState.playheadPosition, calculateTimelineDuration]);
+  }, [rangeSelection, timelineState.selectedClips, timelineState.playheadPosition, timelineState.groups, calculateTimelineDuration]);
 
 
 
