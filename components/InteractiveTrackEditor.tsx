@@ -1900,9 +1900,6 @@ export default function InteractiveTrackEditor({
     (groupId: string, y: number) => {
       if (!trackAreaRef.current) return null;
 
-      const rect = trackAreaRef.current.getBoundingClientRect();
-      const _relativeY = y - rect.top;
-      
       // Find the group element
       const groupElement = trackAreaRef.current.querySelector(`[data-group-id="${groupId}"]`);
       if (!groupElement) return null;
