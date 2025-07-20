@@ -1080,7 +1080,7 @@ function TrackRow({
     // determine if deselection should happen based on what was clicked
   }, []);
 
-  // Find groups that belong to this track
+  // Find collapsed groups that belong to this track (expanded groups are rendered separately)
   const trackGroups = groups.filter(group => group.trackId === track.id && group.collapsed);
 
   return (
@@ -1916,7 +1916,7 @@ export default function InteractiveTrackEditor({
     [timelineState.zoomLevel, timelineState.totalDuration],
   );
 
-  // Get track at Y position
+  // Get track at Y position - accounts for expanded groups at top
   const getTrackAtY = useCallback(
     (y: number) => {
       if (!trackAreaRef.current) return null;
@@ -1924,10 +1924,40 @@ export default function InteractiveTrackEditor({
       const rect = trackAreaRef.current.getBoundingClientRect();
       const relativeY = y - rect.top;
       
-      // Calculate track index based on track height
-      const trackIndex = Math.floor(relativeY / 66); // 65px height + 1px margin
+      // Account for expanded groups at the top
+      const expandedGroups = timelineState.groups.filter(g => !g.collapsed);
+      let expandedGroupsHeight = 0;
+      
+      expandedGroups.forEach(group => {
+        const groupClips = timelineState.tracks
+          .flatMap(t => t.clips)
+          .filter(clip => clip.groupId === group.id);
+        
+        if (groupClips.length > 0) {
+          const clipHeight = 58;
+          const headerHeight = 28;
+          const clipSpacing = 4;
+          const usedTrackIndices = new Set(
+            groupClips.map(clip => clip.groupTrackIndex ?? groupClips.indexOf(clip))
+          );
+          const maxTrackIndex = Math.max(...Array.from(usedTrackIndices), 0);
+          const numTracksToShow = maxTrackIndex + 2;
+          const totalHeight = headerHeight + ((numTracksToShow - 1) * (clipHeight + clipSpacing)) + clipHeight + 4; // +4 for margin
+          expandedGroupsHeight += totalHeight;
+        }
+      });
+      
+      // If clicking in expanded group area, return null (can't drop on expanded groups)
+      if (relativeY < expandedGroupsHeight) {
+        console.log(`📍 Click in expanded group area: relativeY=${relativeY}, expandedGroupsHeight=${expandedGroupsHeight}`);
+        return null;
+      }
+      
+      // Adjust for expanded groups above regular tracks
+      const adjustedY = relativeY - expandedGroupsHeight;
+      const trackIndex = Math.floor(adjustedY / 66); // 65px height + 1px margin
 
-      console.log(`📍 getTrackAtY: y=${y}, relativeY=${relativeY}, trackIndex=${trackIndex}`);
+      console.log(`📍 getTrackAtY: y=${y}, relativeY=${relativeY}, adjustedY=${adjustedY}, trackIndex=${trackIndex}`);
 
       if (
         trackIndex >= 0 &&
@@ -1940,7 +1970,7 @@ export default function InteractiveTrackEditor({
       console.log(`   ❌ No valid track found`);
       return null;
     },
-    [timelineState.tracks],
+    [timelineState.tracks, timelineState.groups],
   );
 
   // Get track index by ID
@@ -5180,7 +5210,45 @@ export default function InteractiveTrackEditor({
         onClick={handleBackgroundClick}
       >
         <div className="pl-[40px] pr-4 py-2">
-          {/* Render tracks with embedded groups */}
+          {/* First, render expanded groups separately (they need more height) */}
+          {timelineState.groups.filter(group => !group.collapsed).map(group => {
+            // Get all clips in this group
+            const groupClips = timelineState.tracks
+              .flatMap(t => t.clips)
+              .filter(clip => clip.groupId === group.id);
+            
+            if (groupClips.length === 0) return null;
+            
+            // Check if group is selected
+            const isGroupSelected = group.clipIds.every(clipId =>
+              timelineState.selectedClips.includes(clipId)
+            );
+
+            return (
+              <GroupTrackRow
+                key={`expanded-group-${group.id}`}
+                group={group}
+                clips={groupClips}
+                onGroupClick={handleGroupClick}
+                onGroupMouseDown={handleGroupMouseDown}
+                onExpandGroup={handleExpandGroup}
+                onCollapseGroup={handleCollapseGroup}
+                onClipClick={handleClipClick}
+                onClipMouseDown={handleClipMouseDown}
+                timeToPixel={timeToPixel}
+                zoomLevel={timelineState.zoomLevel}
+                snapState={snapState}
+                dragState={dragState}
+                selected={isGroupSelected}
+                rangeSelection={rangeSelection}
+                onRangeSelect={handleRangeSelect}
+                onRangeSplit={handleRangeSplit}
+                onRangeDelete={handleRangeDelete}
+              />
+            );
+          })}
+
+          {/* Then, render tracks with embedded collapsed groups */}
           {timelineState.tracks.map((track, trackIndex) => {
             // Get all clips for this track (including grouped ones)
             const trackClips = timelineState.tracks
