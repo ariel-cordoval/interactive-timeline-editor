@@ -177,22 +177,30 @@ function GroupTrackRow({
     setSelectionEnd(startOffset);
     
     let hasMoved = false;
+    let isRangeSelection = false;
     
     const handleMouseMove = (e: MouseEvent) => {
       if (!contentRef.current) return;
       
-      // Check if this is actually a drag (moved more than 3 pixels)
+      // Check if this is actually a drag (moved more than 5 pixels)
       const deltaX = Math.abs(e.clientX - mouseDownX);
       const deltaY = Math.abs(e.clientY - mouseDownY);
       
-      if (deltaX > 3 || deltaY > 3) {
+      if (deltaX > 5 || deltaY > 5) {
         hasMoved = true;
         
-        // Continue with range selection
-        const rect = contentRef.current.getBoundingClientRect();
-        const currentX = e.clientX - rect.left;
-        const currentOffset = Math.max(0, Math.min(groupDuration, (currentX / rect.width) * groupDuration));
-        setSelectionEnd(currentOffset);
+        // Only start range selection if we're dragging horizontally more than vertically
+        if (deltaX > Math.abs(deltaY)) {
+          isRangeSelection = true;
+          
+          // Continue with range selection
+          const rect = contentRef.current.getBoundingClientRect();
+          const currentX = e.clientX - rect.left;
+          const currentOffset = Math.max(0, Math.min(groupDuration, (currentX / rect.width) * groupDuration));
+          setSelectionEnd(currentOffset);
+          
+          console.log(`📍 Range selecting: ${Math.min(startOffset, currentOffset).toFixed(2)}s - ${Math.max(startOffset, currentOffset).toFixed(2)}s`);
+        }
       }
     };
 
@@ -201,18 +209,18 @@ function GroupTrackRow({
       const timeDelta = Date.now() - mouseDownTime;
       
       // If this was a simple click (no movement and quick), select the group
-      if (!hasMoved && timeDelta < 300) {
+      if (!hasMoved && timeDelta < 500) {
         console.log('👆 Simple click in group content area - selecting group');
         setSelectionStart(null);
         setSelectionEnd(null);
         onGroupClick(group.id, e as any);
-      } else if (hasMoved && selectionStart !== null && selectionEnd !== null) {
-        // This was a drag for range selection
+      } else if (isRangeSelection && selectionStart !== null && selectionEnd !== null) {
+        // This was a horizontal drag for range selection
         const start = Math.min(selectionStart, selectionEnd);
         const end = Math.max(selectionStart, selectionEnd);
         
-        // Only trigger range select if there's a meaningful selection (> 0.1 seconds)
-        if (Math.abs(end - start) > 0.1) {
+        // Only trigger range select if there's a meaningful selection (> 0.2 seconds)
+        if (Math.abs(end - start) > 0.2) {
           // Use the group ID as the clip ID for range operations
           onRangeSelect(group.id, start, end);
           console.log(`✂️ Selected range in group for editing: ${start.toFixed(2)}s - ${end.toFixed(2)}s (${Math.abs(end - start).toFixed(2)}s duration)`);
@@ -221,8 +229,19 @@ function GroupTrackRow({
           setSelectionStart(null);
           setSelectionEnd(null);
           // If selection was too small, just select the group
+          console.log('👆 Range too small - selecting group instead');
           onGroupClick(group.id, e as any);
         }
+      } else if (hasMoved && !isRangeSelection) {
+        // This was a vertical drag or other movement - just select the group
+        console.log('👆 Non-range movement - selecting group');
+        setSelectionStart(null);
+        setSelectionEnd(null);
+        onGroupClick(group.id, e as any);
+      } else {
+        // Clear any pending selections
+        setSelectionStart(null);
+        setSelectionEnd(null);
       }
       
       document.removeEventListener('mousemove', handleMouseMove);
@@ -427,8 +446,11 @@ function GroupTrackRow({
                 if (!(e.target as HTMLElement).closest('button')) {
                   e.preventDefault();
                   e.stopPropagation();
-                  console.log('👆 Group header clicked - selecting group:', group.id);
-                  onGroupClick(group.id, e);
+                  // Small delay to ensure this takes priority over content area handlers
+                  setTimeout(() => {
+                    console.log('👆 Group header clicked - selecting group:', group.id);
+                    onGroupClick(group.id, e);
+                  }, 0);
                 }
               }}
               onMouseDown={(e) => {
@@ -635,8 +657,11 @@ function GroupTrackRow({
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                console.log('👆 Expanded group header clicked - selecting group:', group.id);
-                onGroupClick(group.id, e);
+                // Small delay to ensure this takes priority over other handlers
+                setTimeout(() => {
+                  console.log('👆 Expanded group header clicked - selecting group:', group.id);
+                  onGroupClick(group.id, e);
+                }, 0);
               }}
               title="Click to select entire group"
             />
@@ -2504,9 +2529,13 @@ export default function InteractiveTrackEditor({
           }
         }
 
-        // Clear range selection when changing clip selection
-        if (newSelectedClips.length !== prev.selectedClips.length || 
-            !newSelectedClips.every(id => prev.selectedClips.includes(id))) {
+        // Clear range selection when changing clip selection (but preserve it if selecting the same group)
+        const currentRangeIsForGroup = rangeSelection && prev.groups.some(g => g.id === rangeSelection.clipId);
+        const newSelectionIncludesRangeGroup = currentRangeIsForGroup && 
+          prev.groups.find(g => g.id === rangeSelection!.clipId)?.clipIds.every(id => newSelectedClips.includes(id));
+        
+        if (!newSelectionIncludesRangeGroup && (newSelectedClips.length !== prev.selectedClips.length || 
+            !newSelectedClips.every(id => prev.selectedClips.includes(id)))) {
           setRangeSelection(null);
         }
 
@@ -4943,19 +4972,42 @@ export default function InteractiveTrackEditor({
   const handleRangeSelect = useCallback((clipId: string, startOffset: number, endOffset: number) => {
     setRangeSelection({ clipId, startOffset, endOffset });
     
-    // Clear clip selections when making a range selection to avoid conflicts
-    setTimelineState((prev) => ({
-      ...prev,
-      selectedClips: [], // Clear all clip selections
-      tracks: prev.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) => ({
-          ...clip,
-          selected: false, // Unselect all clips
+    // Check if this is a group range selection
+    const group = timelineState.groups.find(g => g.id === clipId);
+    
+    if (group) {
+      // For group range selections, keep the group selected
+      console.log(`📍 Group range selection: keeping group ${group.name} selected`);
+      
+      // Ensure the group remains selected
+      setTimelineState((prev) => ({
+        ...prev,
+        selectedClips: group.clipIds, // Keep group clips selected
+        tracks: prev.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.map((clip) => ({
+            ...clip,
+            selected: group.clipIds.includes(clip.id), // Keep group clips selected
+          })),
         })),
-      })),
-    }));
-  }, []);
+      }));
+    } else {
+      // For individual clip range selections, only keep that clip selected
+      console.log(`📍 Individual clip range selection: selecting only clip ${clipId}`);
+      
+      setTimelineState((prev) => ({
+        ...prev,
+        selectedClips: [clipId], // Keep only the ranged clip selected
+        tracks: prev.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.map((clip) => ({
+            ...clip,
+            selected: clip.id === clipId, // Select only the ranged clip
+          })),
+        })),
+      }));
+    }
+  }, [timelineState.groups]);
 
   // Clear range selection
   const clearRangeSelection = useCallback(() => {
