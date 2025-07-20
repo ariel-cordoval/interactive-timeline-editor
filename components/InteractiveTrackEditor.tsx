@@ -434,23 +434,19 @@ function GroupTrackRow({
             style={{ width: `${groupWidth}px` }}
             data-group-id={group.id}
           >
-            {/* Header Area - Clickable for selection + Draggable */}
+            {/* Header Area - Click to select, drag when selected */}
             <div
               className={`
                 relative bg-[#2b2b2b] hover:bg-[#333333] transition-colors duration-150
-                ${isBeingDragged ? 'cursor-grabbing' : 'cursor-grab'}
+                ${isBeingDragged ? 'cursor-grabbing' : selected ? 'cursor-grab' : 'cursor-pointer'}
               `}
-              data-draggable="true"
               onClick={(e) => {
                 // Handle group selection on header click
                 if (!(e.target as HTMLElement).closest('button')) {
                   e.preventDefault();
                   e.stopPropagation();
-                  // Small delay to ensure this takes priority over content area handlers
-                  setTimeout(() => {
-                    console.log('👆 Group header clicked - selecting group:', group.id);
-                    onGroupClick(group.id, e);
-                  }, 0);
+                  console.log('👆 Group header clicked - selecting group:', group.id);
+                  onGroupClick(group.id, e);
                 }
               }}
               onMouseDown={(e) => {
@@ -458,10 +454,17 @@ function GroupTrackRow({
                 if ((e.target as HTMLElement).closest('button')) {
                   return;
                 }
-                // Start drag immediately for header area
-                e.preventDefault();
-                e.stopPropagation();
-                onGroupMouseDown(group.id, e, "move");
+                
+                // Only start drag if group is already selected
+                if (selected) {
+                  console.log('🖱️ Starting drag for selected group:', group.id);
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onGroupMouseDown(group.id, e, "move");
+                } else {
+                  // If not selected, just select it (click handler will take care of this)
+                  console.log('👆 Group not selected, will select on click');
+                }
               }}
             >
               <div className="flex items-center gap-2 px-2 py-1">
@@ -492,13 +495,16 @@ function GroupTrackRow({
                   </button>
                 </div>
                 
-                {/* Group Name (instead of File Name) - Draggable area */}
+                {/* Group Name (instead of File Name) - Draggable when selected */}
                 <div 
-                  className="flex-1 min-w-0 cursor-grab"
+                  className={`flex-1 min-w-0 ${selected ? 'cursor-grab' : 'cursor-pointer'}`}
                   onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onGroupMouseDown(group.id, e, "move");
+                    // Only start drag if group is already selected
+                    if (selected) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onGroupMouseDown(group.id, e, "move");
+                    }
                   }}
                 >
                   <p className="text-[#bbbbbb] text-[11px] font-semibold leading-[16px] truncate">
@@ -506,13 +512,16 @@ function GroupTrackRow({
                   </p>
                 </div>
                 
-                {/* Duration indicator - Also draggable */}
+                {/* Duration indicator - Draggable when selected */}
                 <div 
-                  className="text-[#888888] text-[10px] shrink-0 cursor-grab"
+                  className={`text-[#888888] text-[10px] shrink-0 ${selected ? 'cursor-grab' : 'cursor-pointer'}`}
                   onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onGroupMouseDown(group.id, e, "move");
+                    // Only start drag if group is already selected
+                    if (selected) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onGroupMouseDown(group.id, e, "move");
+                    }
                   }}
                 >
                   {Math.floor(groupDuration)}s
@@ -651,19 +660,30 @@ function GroupTrackRow({
               selected ? 'bg-[#2b2b2b]' : 'bg-[#1d1d1d]'
             } rounded-lg overflow-hidden mb-1`}
           >
-            {/* Main clickable area for group selection */}
+            {/* Main clickable area for group selection and dragging */}
             <div 
-              className="absolute inset-0 cursor-pointer hover:bg-[#2b2b2b] transition-colors"
+              className={`absolute inset-0 hover:bg-[#2b2b2b] transition-colors ${
+                isBeingDragged ? 'cursor-grabbing' : selected ? 'cursor-grab' : 'cursor-pointer'
+              }`}
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                // Small delay to ensure this takes priority over other handlers
-                setTimeout(() => {
-                  console.log('👆 Expanded group header clicked - selecting group:', group.id);
-                  onGroupClick(group.id, e);
-                }, 0);
+                console.log('👆 Expanded group header clicked - selecting group:', group.id);
+                onGroupClick(group.id, e);
               }}
-              title="Click to select entire group"
+              onMouseDown={(e) => {
+                // Only start drag if group is already selected
+                if (selected) {
+                  console.log('🖱️ Starting drag for selected expanded group:', group.id);
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onGroupMouseDown(group.id, e, "move");
+                } else {
+                  // If not selected, just select it (click handler will take care of this)
+                  console.log('👆 Expanded group not selected, will select on click');
+                }
+              }}
+              title={selected ? "Drag to move group" : "Click to select entire group"}
             />
             
             <div className="flex items-center gap-2 px-2 py-1 h-full relative z-10">
