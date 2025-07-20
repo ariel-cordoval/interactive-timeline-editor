@@ -5250,12 +5250,14 @@ export default function InteractiveTrackEditor({
 
           {/* Then, render tracks with embedded collapsed groups */}
           {timelineState.tracks.map((track, trackIndex) => {
-            // Get all clips for this track (including grouped ones)
-            const trackClips = timelineState.tracks
-              .flatMap((t) => t.clips)
-              .filter((c) => c.trackId === track.id);
+            // Get clips for this track, excluding clips that belong to expanded groups
+            const trackClips = track.clips.filter(clip => {
+              if (!clip.groupId) return true; // Include ungrouped clips
+              const group = timelineState.groups.find(g => g.id === clip.groupId);
+              return group && group.collapsed; // Only include clips from collapsed groups
+            });
 
-            // Skip rendering if no clips in this track
+            // Skip rendering if no clips in this track (after filtering out expanded group clips)
             if (trackClips.length === 0) return null;
 
             // Check if this track is a drop target for any of the dragged clips
