@@ -1191,7 +1191,7 @@ function InteractiveControls({
   selectedClips,
   zoomLevel,
   hasGroupedSelection,
-  timelineState,
+  timelineState: _timelineState,
   rangeSelection,
   onRangeSplit,
   onRangeDelete,
@@ -1813,7 +1813,7 @@ export default function InteractiveTrackEditor({
       const rect = trackAreaRef.current.getBoundingClientRect();
       const relativeY = y - rect.top;
       
-      console.log(`📍 getTrackAtY: y=${y}, relativeY=${relativeY}`);
+      // console.log(`📍 getTrackAtY: y=${y}, relativeY=${relativeY}`);
       
       // Account for groups rendered as separate track rows first
       const groupCount = timelineState.groups.length;
@@ -1901,7 +1901,7 @@ export default function InteractiveTrackEditor({
       if (!trackAreaRef.current) return null;
 
       const rect = trackAreaRef.current.getBoundingClientRect();
-      const relativeY = y - rect.top;
+      const _relativeY = y - rect.top;
       
       // Find the group element
       const groupElement = trackAreaRef.current.querySelector(`[data-group-id="${groupId}"]`);
@@ -3254,20 +3254,6 @@ export default function InteractiveTrackEditor({
     }));
   }, [timelineState.selectedClips, timelineState.tracks]);
 
-  // Handle group expand/collapse
-  const handleToggleGroupCollapse = useCallback((groupId: string) => {
-    setTimelineState((prev) => ({
-      ...prev,
-      groups: prev.groups.map((group) =>
-        group.id === groupId
-          ? { ...group, collapsed: !group.collapsed }
-          : group
-      ),
-    }));
-    
-    console.log(`🔄 Toggled group ${groupId} collapse state`);
-  }, []);
-
   // Handle group expand (from collapsed group component)
   const handleExpandGroup = useCallback((groupId: string) => {
     setTimelineState((prev) => ({
@@ -3711,7 +3697,6 @@ export default function InteractiveTrackEditor({
     
     // Convert raw data to Float32Array based on bit depth
     const dataView = new DataView(arrayBuffer);
-    let sampleIndex = 0;
     
     for (let channel = 0; channel < channels; channel++) {
       const channelData = audioBuffer.getChannelData(channel);
