@@ -2770,6 +2770,7 @@ export default function InteractiveTrackEditor({
               ...clip,
               id: `${clip.id}-second-${timestamp}`,
               startTime: splitTime,
+              endTime: clip.endTime,
               duration: clip.endTime - splitTime,
               selected: true, // Select the second part
               waveformData: clip.waveformData,
@@ -2868,6 +2869,7 @@ export default function InteractiveTrackEditor({
             ...clip,
             id: `${clip.id}-second-${Date.now()}`,
             startTime: splitTime,
+            endTime: clip.endTime,
             duration: clip.endTime - splitTime,
             selected: true,
             waveformData: clip.waveformData,
