@@ -1047,10 +1047,14 @@ interface TrackRowProps {
   onRangeSelect: (clipId: string, startOffset: number, endOffset: number) => void;
   onRangeSplit: (clipId: string, startOffset: number, endOffset: number) => void;
   onRangeDelete: (clipId: string, startOffset: number, endOffset: number) => void;
+  onGroupClick: (groupId: string, event: React.MouseEvent) => void;
+  onGroupMouseDown: (groupId: string, event: React.MouseEvent, dragType: "move" | "trim-start" | "trim-end") => void;
+  onExpandGroup: (groupId: string) => void;
+  onCollapseGroup: (groupId: string) => void;
 }
 
 function TrackRow({
-  track: _track, // Unused for now
+  track,
   clips,
   onClipClick,
   onClipMouseDown,
@@ -1065,12 +1069,19 @@ function TrackRow({
   onRangeSelect,
   onRangeSplit,
   onRangeDelete,
+  onGroupClick,
+  onGroupMouseDown,
+  onExpandGroup,
+  onCollapseGroup,
 }: TrackRowProps) {
   // Handle clicks on track areas - let the main background handler deal with deselection
   const handleTrackClick = useCallback((_event: React.MouseEvent) => {
     // Don't interfere with clip interactions - let the improved background handler
     // determine if deselection should happen based on what was clicked
   }, []);
+
+  // Find groups that belong to this track
+  const trackGroups = groups.filter(group => group.trackId === track.id && group.collapsed);
 
   return (
     <div
@@ -1081,13 +1092,72 @@ function TrackRow({
       }`}
       onClick={handleTrackClick}
     >
-      {/* Clips and Collapsed Groups */}
+      {/* Render collapsed groups first */}
+      {trackGroups.map((group) => {
+        // Get all clips in this group
+        const groupClips = clips.filter(clip => clip.groupId === group.id);
+        if (groupClips.length === 0) return null;
+        
+        // Calculate group bounds
+        const groupStartTime = Math.min(...groupClips.map(c => c.startTime));
+        const groupEndTime = Math.max(...groupClips.map(c => c.endTime));
+        const groupDuration = groupEndTime - groupStartTime;
+        const groupWidth = timeToPixel(groupDuration);
+        
+        // Check if group is selected
+        const isGroupSelected = group.clipIds.every(clipId =>
+          clips.some(clip => clip.id === clipId && clip.selected)
+        );
+
+        const isSnappingToThis = snapState.isSnapping && 
+          groupClips.some(clip => snapState.targetClipId === clip.id);
+        const isBeingDragged = groupClips.some(clip => 
+          dragState.selectedClipIds.includes(clip.id));
+
+        return (
+          <div
+            key={`group-${group.id}`}
+            className={`absolute top-0 h-full transition-all duration-200 select-none ${
+              isBeingDragged ? "opacity-80" : ""
+            } ${isSnappingToThis ? "ring-2 ring-purple-400" : ""}`}
+            style={{
+              left: `${timeToPixel(groupStartTime)}px`,
+              width: `${groupWidth}px`,
+              zIndex: isGroupSelected ? 15 : 10,
+              transform: `scaleX(${zoomLevel})`,
+            }}
+            data-group-id={group.id}
+          >
+            <GroupTrackRow
+              group={group}
+              clips={groupClips}
+              onGroupClick={onGroupClick}
+              onGroupMouseDown={onGroupMouseDown}
+              onExpandGroup={onExpandGroup}
+              onCollapseGroup={onCollapseGroup}
+              onClipClick={onClipClick}
+              onClipMouseDown={onClipMouseDown}
+              timeToPixel={timeToPixel}
+              zoomLevel={zoomLevel}
+              snapState={snapState}
+              dragState={dragState}
+              selected={isGroupSelected}
+              rangeSelection={rangeSelection}
+              onRangeSelect={onRangeSelect}
+              onRangeSplit={onRangeSplit}
+              onRangeDelete={onRangeDelete}
+            />
+          </div>
+        );
+      })}
+
+      {/* Render individual clips that aren't in collapsed groups */}
       {clips.map((clip) => {
         const group = clip.groupId ? groups.find((g) => g.id === clip.groupId) : null;
         const isGrouped = Boolean(group);
         
         // If this clip belongs to a collapsed group, skip rendering individual clip
-        // (the group will be rendered separately by the parent component)
+        // (the group will be rendered above)
         if (group && group.collapsed) {
           return null;
         }
@@ -1846,7 +1916,7 @@ export default function InteractiveTrackEditor({
     [timelineState.zoomLevel, timelineState.totalDuration],
   );
 
-  // Get track at Y position - accounts for group track rows
+  // Get track at Y position
   const getTrackAtY = useCallback(
     (y: number) => {
       if (!trackAreaRef.current) return null;
@@ -1854,52 +1924,10 @@ export default function InteractiveTrackEditor({
       const rect = trackAreaRef.current.getBoundingClientRect();
       const relativeY = y - rect.top;
       
-      // console.log(`📍 getTrackAtY: y=${y}, relativeY=${relativeY}`);
-      
-      // Account for groups rendered as separate track rows first
-      const groupCount = timelineState.groups.length;
-      const groupRowHeight = 66; // Same as track height (65px + 1px margin)
-      const totalGroupHeight = groupCount * groupRowHeight;
-      
-      console.log(`   Groups: count=${groupCount}, totalHeight=${totalGroupHeight}`);
-      
-      // If clicking in group area and NOT dragging a group, return null (can't drop on groups)
-      // But if we ARE dragging a group, we want to allow targeting regular tracks
-      if (relativeY < totalGroupHeight) {
-        console.log(`   👆 Mouse in group area (relativeY=${relativeY} < totalGroupHeight=${totalGroupHeight})`);
-        // Check if we're currently dragging (indicating this might be a group drag)
-        if (dragState.isDragging && dragState.selectedClipIds.length > 0) {
-          console.log(`   🎯 Currently dragging, checking if it's a group drag`);
-          // Check if any selected clips are part of collapsed groups
-          const hasCollapsedGroupClips = dragState.selectedClipIds.some(clipId => {
-            const clip = timelineState.tracks.flatMap(t => t.clips).find(c => c.id === clipId);
-            if (!clip?.groupId) return false;
-            const group = timelineState.groups.find(g => g.id === clip.groupId);
-            return group && group.collapsed;
-          });
-          
-          if (hasCollapsedGroupClips) {
-            console.log(`   ✅ Dragging collapsed group - allowing targeting by converting mouse position`);
-            // When dragging a group, treat the mouse position as if it's targeting the tracks below
-            // We'll map the group area to the regular track area proportionally
-            const groupIndex = Math.floor(relativeY / groupRowHeight);
-            const trackIndex = Math.min(groupIndex, timelineState.tracks.length - 1);
-            
-            if (trackIndex >= 0 && trackIndex < timelineState.tracks.length) {
-              const targetTrack = timelineState.tracks[trackIndex];
-              console.log(`   🎯 Group drag: groupArea position maps to track index=${trackIndex}, id=${targetTrack.id}`);
-              return targetTrack;
-            }
-          }
-        }
-        return null;
-      }
-      
-      // Adjust for groups above regular tracks
-      const adjustedY = relativeY - totalGroupHeight;
-      const trackIndex = Math.floor(adjustedY / 66); // 65px height + 1px margin
+      // Calculate track index based on track height
+      const trackIndex = Math.floor(relativeY / 66); // 65px height + 1px margin
 
-      console.log(`   Regular track area: adjustedY=${adjustedY}, trackIndex=${trackIndex}`);
+      console.log(`📍 getTrackAtY: y=${y}, relativeY=${relativeY}, trackIndex=${trackIndex}`);
 
       if (
         trackIndex >= 0 &&
@@ -1912,7 +1940,7 @@ export default function InteractiveTrackEditor({
       console.log(`   ❌ No valid track found`);
       return null;
     },
-    [timelineState.tracks, timelineState.groups.length, dragState.isDragging, dragState.selectedClipIds, timelineState.groups],
+    [timelineState.tracks],
   );
 
   // Get track index by ID
@@ -5152,52 +5180,14 @@ export default function InteractiveTrackEditor({
         onClick={handleBackgroundClick}
       >
         <div className="pl-[40px] pr-4 py-2">
-          {/* First, render all groups as separate track rows */}
-          {timelineState.groups.map(group => {
-            // Get all clips in this group
-            const groupClips = timelineState.tracks
-              .flatMap(t => t.clips)
-              .filter(clip => clip.groupId === group.id);
-            
-            if (groupClips.length === 0) return null;
-            
-            // Check if group is selected
-            const isGroupSelected = group.clipIds.every(clipId =>
-              timelineState.selectedClips.includes(clipId)
-            );
-
-            return (
-              <GroupTrackRow
-                key={`group-${group.id}`}
-                group={group}
-                clips={groupClips}
-                onGroupClick={handleGroupClick}
-                onGroupMouseDown={handleGroupMouseDown}
-                onExpandGroup={handleExpandGroup}
-                onCollapseGroup={handleCollapseGroup}
-                onClipClick={handleClipClick}
-                onClipMouseDown={handleClipMouseDown}
-                timeToPixel={timeToPixel}
-                zoomLevel={timelineState.zoomLevel}
-                snapState={snapState}
-                dragState={dragState}
-                selected={isGroupSelected}
-                rangeSelection={rangeSelection}
-                onRangeSelect={handleRangeSelect}
-                onRangeSplit={handleRangeSplit}
-                onRangeDelete={handleRangeDelete}
-              />
-            );
-          })}
-
-          {/* Then, render ungrouped tracks */}
+          {/* Render tracks with embedded groups */}
           {timelineState.tracks.map((track, trackIndex) => {
-            // Only get clips that are NOT part of any group
+            // Get all clips for this track (including grouped ones)
             const trackClips = timelineState.tracks
               .flatMap((t) => t.clips)
-              .filter((c) => c.trackId === track.id && !c.groupId);
+              .filter((c) => c.trackId === track.id);
 
-            // Skip rendering if no ungrouped clips in this track
+            // Skip rendering if no clips in this track
             if (trackClips.length === 0) return null;
 
             // Check if this track is a drop target for any of the dragged clips
@@ -5247,6 +5237,10 @@ export default function InteractiveTrackEditor({
                 onRangeSelect={handleRangeSelect}
                 onRangeSplit={handleRangeSplit}
                 onRangeDelete={handleRangeDelete}
+                onGroupClick={handleGroupClick}
+                onGroupMouseDown={handleGroupMouseDown}
+                onExpandGroup={handleExpandGroup}
+                onCollapseGroup={handleCollapseGroup}
               />
             );
           })}
