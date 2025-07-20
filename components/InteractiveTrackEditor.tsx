@@ -392,9 +392,9 @@ function GroupTrackRow({
     const waveformBars = generateCombinedWaveform();
 
     return (
-      <div className="mb-1 h-[65px] relative">
+      <div className="mb-1 h-[65px] relative select-none">
         <div
-          className={`absolute top-0 h-full transition-all duration-200 ${
+          className={`absolute top-0 h-full transition-all duration-200 select-none ${
             isBeingDragged ? "opacity-80" : ""
           } ${isSnappingToThis ? "ring-2 ring-purple-400" : ""}`}
           style={{
@@ -506,7 +506,7 @@ function GroupTrackRow({
                 transition-colors duration-150
                 bg-[#1d1d1d] hover:bg-[#222222]
                 ${isSelecting ? 'cursor-grabbing bg-[#252525]' : 'cursor-pointer hover:cursor-crosshair'}
-                z-30 pointer-events-auto mx-1
+                z-30 pointer-events-auto mx-1 select-none
               `}
               onMouseDown={handleContentMouseDown}
               title={`Group: Click to select • Drag to select range • Use all clip operations (split, trim, move)${clips.length > 1 ? ` • ${clips.length} tracks combined` : ''}`}
@@ -604,12 +604,12 @@ function GroupTrackRow({
 
     return (
       <div 
-        className="mb-1 relative"
+        className="mb-1 relative select-none"
         style={{ height: `${totalHeight}px` }}
       >
         {/* Tight Group Container - positioned and sized like collapsed state */}
         <div
-          className={`absolute top-0 transition-all duration-200 ${
+          className={`absolute top-0 transition-all duration-200 select-none ${
             isBeingDragged ? "opacity-80" : ""
           } ${isSnappingToThis ? "ring-2 ring-purple-400" : ""} ${
             selected ? "ring-2 ring-[#E961FF] ring-opacity-50" : ""
@@ -907,7 +907,7 @@ function InteractiveTrack({
 
   return (
     <div
-      className={`absolute top-0 h-full transition-all duration-200 ${
+      className={`absolute top-0 h-full transition-all duration-200 select-none ${
         isDragging && isBeingDragged ? "opacity-80" : ""
       } ${isSnappingToThis ? "ring-2 ring-purple-400" : ""} ${
         isGrouped
@@ -1029,7 +1029,7 @@ function TrackRow({
 
   return (
     <div
-      className={`mb-1 h-[65px] relative transition-all duration-200 ${
+      className={`mb-1 h-[65px] relative transition-all duration-200 select-none ${
         isDropTarget && isValidDropTarget
           ? "bg-[#151515] border border-[#2b2b2b]"
           : ""
@@ -5019,7 +5019,7 @@ export default function InteractiveTrackEditor({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full bg-[#0e0e0e] flex flex-col"
+      className="relative w-full h-full bg-[#0e0e0e] flex flex-col select-none"
     >
       {/* Action Bar */}
       <InteractiveControls
@@ -5076,7 +5076,7 @@ export default function InteractiveTrackEditor({
       {/* Track Area with Background Click Handler */}
       <div
         ref={trackAreaRef}
-        className="flex-1 bg-[#0e0e0e] overflow-hidden"
+        className="flex-1 bg-[#0e0e0e] overflow-hidden select-none"
         onClick={handleBackgroundClick}
       >
         <div className="pl-[40px] pr-4 py-2">
