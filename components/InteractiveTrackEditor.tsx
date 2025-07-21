@@ -35,8 +35,8 @@ interface TimelineGroup {
   name: string;
   clipIds: string[];
   color: string;
-  collapsed: boolean;
   trackId: string; // Groups now belong to a specific track like clips
+  collapsed?: boolean; // Whether the group is collapsed or expanded
 }
 
 interface AudioTrackSegment {
@@ -159,7 +159,7 @@ function GroupTrackRow({
 
   // Handle content area interaction - works exactly like TimelineClip
   const handleContentMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!contentRef.current || !group.collapsed) return;
+            if (!contentRef.current) return;
     
     e.preventDefault();
     e.stopPropagation();
@@ -250,7 +250,7 @@ function GroupTrackRow({
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [group.collapsed, group.id, groupDuration, onRangeSelect, onGroupClick, selectionStart, selectionEnd]);
+      }, [group.id, groupDuration, onRangeSelect, onGroupClick, selectionStart, selectionEnd]);
 
   // Clear selection
   const clearSelection = useCallback(() => {
@@ -268,7 +268,7 @@ function GroupTrackRow({
   // Handle keyboard shortcuts for collapsed groups
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!selected || !group.collapsed) return;
+      if (!selected) return;
       
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
@@ -298,11 +298,11 @@ function GroupTrackRow({
       }
     };
 
-    if (selected && group.collapsed) {
+    if (selected) {
       document.addEventListener('keydown', handleKeyDown);
       return () => document.removeEventListener('keydown', handleKeyDown);
     }
-  }, [selected, group.collapsed, group.id, group.name, selectionStart, selectionEnd, groupDuration, onRangeDelete, onRangeSplit, clearSelection]);
+  }, [selected, group.id, group.name, selectionStart, selectionEnd, groupDuration, onRangeDelete, onRangeSplit, clearSelection]);
 
   // Generate consistent colors for speakers
   const getSpeakerColor = (clipName: string, clipColor?: string) => {
@@ -330,90 +330,89 @@ function GroupTrackRow({
     return colors[Math.abs(hash) % colors.length];
   };
 
-  if (group.collapsed) {
-    // COLLAPSED STATE: Real combined waveform with speaker color coding
-    const generateCombinedWaveform = () => {
-      if (!clips.length) {
-        console.log('❌ No clips found for waveform generation');
-        return [];
-      }
+  // UNIFIED GROUP STATE: Real combined waveform with speaker color coding
+  const generateCombinedWaveform = () => {
+    if (!clips.length) {
+      console.log('❌ No clips found for waveform generation');
+      return [];
+    }
+    
+    const bars = [];
+    const barCount = Math.max(20, Math.floor(groupWidth / 3)); // More bars for better resolution
+    const segmentDuration = groupDuration / barCount;
+    
+    for (let i = 0; i < barCount; i++) {
+      const segmentTime = i * segmentDuration + groupStartTime;
       
-      const bars = [];
-      const barCount = Math.max(20, Math.floor(groupWidth / 3)); // More bars for better resolution
-      const segmentDuration = groupDuration / barCount;
+      // Find which clips are active at this time and their contributions
+      const activeClips = clips.filter(clip => {
+        return segmentTime >= clip.startTime && segmentTime < clip.endTime;
+      });
       
-      for (let i = 0; i < barCount; i++) {
-        const segmentTime = i * segmentDuration + groupStartTime;
-        
-        // Find which clips are active at this time and their contributions
-        const activeClips = clips.filter(clip => {
-          return segmentTime >= clip.startTime && segmentTime < clip.endTime;
-        });
-        
-        // Calculate individual amplitudes and find dominant speaker
-        const clipAmplitudes: Array<{
-          clip: TimelineClip;
-          amplitude: number;
-          color: string;
-        }> = [];
-        
-        // Removed excessive logging
-        
-        activeClips.forEach(clip => {
-          if (clip.waveformData && clip.waveformData.length > 0) {
-            const clipProgress = (segmentTime - clip.startTime) / clip.duration;
-            const waveformIndex = Math.floor(clipProgress * clip.waveformData.length);
-            if (waveformIndex >= 0 && waveformIndex < clip.waveformData.length) {
-              const amplitude = clip.waveformData[waveformIndex];
-              clipAmplitudes.push({
-                clip,
-                amplitude,
-                color: getSpeakerColor(clip.name, clip.waveformColor)
-              });
-            }
+      // Calculate individual amplitudes and find dominant speaker
+      const clipAmplitudes: Array<{
+        clip: TimelineClip;
+        amplitude: number;
+        color: string;
+      }> = [];
+      
+      // Removed excessive logging
+      
+      activeClips.forEach(clip => {
+        if (clip.waveformData && clip.waveformData.length > 0) {
+          const clipProgress = (segmentTime - clip.startTime) / clip.duration;
+          const waveformIndex = Math.floor(clipProgress * clip.waveformData.length);
+          if (waveformIndex >= 0 && waveformIndex < clip.waveformData.length) {
+            const amplitude = clip.waveformData[waveformIndex];
+            clipAmplitudes.push({
+              clip,
+              amplitude,
+              color: getSpeakerColor(clip.name, clip.waveformColor)
+            });
           }
-        });
-        
-        if (clipAmplitudes.length > 0) {
-          // Find the dominant speaker (highest amplitude)
-          const dominantSpeaker = clipAmplitudes.reduce((prev, current) => 
-            current.amplitude > prev.amplitude ? current : prev
-          );
-          
-          // Calculate combined amplitude (sum of all active clips)
-          const totalAmplitude = clipAmplitudes.reduce((sum, item) => sum + item.amplitude, 0);
-          const normalizedAmplitude = Math.min(1, totalAmplitude);
-          
-          // Use dominant speaker's color, with intensity based on their dominance
-          const dominanceRatio = dominantSpeaker.amplitude / totalAmplitude;
-          const barHeight = Math.max(2, normalizedAmplitude * 24);
-          const opacity = 0.4 + (dominanceRatio * 0.6); // More dominant = more opaque
-          
-          bars.push({
-            x: (i / barCount) * groupWidth,
-            height: barHeight,
-            opacity,
-            color: dominantSpeaker.color,
-            speakers: clipAmplitudes.map(ca => ca.clip.name || 'Unknown').join(', '),
-            dominantSpeaker: dominantSpeaker.clip.name || 'Unknown'
-          });
-        } else {
-          // No active clips - show minimal bar
-          bars.push({
-            x: (i / barCount) * groupWidth,
-            height: 2,
-            opacity: 0.2,
-            color: '#666666',
-            speakers: '',
-            dominantSpeaker: ''
-          });
         }
-      }
+      });
       
-      return bars;
-    };
+      if (clipAmplitudes.length > 0) {
+        // Find the dominant speaker (highest amplitude)
+        const dominantSpeaker = clipAmplitudes.reduce((prev, current) => 
+          current.amplitude > prev.amplitude ? current : prev
+        );
+        
+        // Calculate combined amplitude (sum of all active clips)
+        const totalAmplitude = clipAmplitudes.reduce((sum, item) => sum + item.amplitude, 0);
+        const normalizedAmplitude = Math.min(1, totalAmplitude);
+        
+        // Use dominant speaker's color, with intensity based on their dominance
+        const dominanceRatio = dominantSpeaker.amplitude / totalAmplitude;
+        const barHeight = Math.max(2, normalizedAmplitude * 24);
+        const opacity = 0.4 + (dominanceRatio * 0.6); // More dominant = more opaque
+        
+        bars.push({
+          x: (i / barCount) * groupWidth,
+          height: barHeight,
+          opacity,
+          color: dominantSpeaker.color,
+          speakers: clipAmplitudes.map(ca => ca.clip.name || 'Unknown').join(', '),
+          dominantSpeaker: dominantSpeaker.clip.name || 'Unknown'
+        });
+      } else {
+        // No active clips - show minimal bar
+        bars.push({
+          x: (i / barCount) * groupWidth,
+          height: 2,
+          opacity: 0.2,
+          color: '#666666',
+          speakers: '',
+          dominantSpeaker: ''
+        });
+      }
+    }
+    
+    return bars;
+  };
 
-    const waveformBars = generateCombinedWaveform();
+  const waveformBars = generateCombinedWaveform();
 
     return (
       <div className="mb-1 h-[65px] relative select-none">
@@ -473,33 +472,6 @@ function GroupTrackRow({
               }}
             >
               <div className="flex items-center gap-2 px-2 py-1">
-                {/* Expand/Collapse Arrow (instead of Audio Icon) */}
-                <div className="w-4 h-4 rounded-sm bg-[#666666] shrink-0 flex items-center justify-center relative z-10">
-                  <button
-                    className="w-3 h-3 flex items-center justify-center rotate-[270deg] hover:scale-110 transition-transform"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onExpandGroup(group.id);
-                    }}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                    title="Expand group"
-                  >
-                    <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 16 16" fill="none">
-                      <path
-                        d="M4 6l4 4 4-4"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                </div>
-                
                 {/* Group Name (instead of File Name) - Draggable when selected */}
                 <div 
                   className={`flex-1 min-w-0 ${selected ? 'cursor-grab' : 'cursor-pointer'}`}
@@ -623,249 +595,6 @@ function GroupTrackRow({
         </div>
       </div>
     );
-  } else {
-    // EXPANDED STATE: Stacked clips with group header - HUGS CONTENT TIGHTLY
-    const clipHeight = 58; // Height for each clip in expanded view
-    const headerHeight = 28; // Height for group header
-    const clipSpacing = 4; // Spacing between clips
-    
-    // Calculate height based on actual track usage
-    const usedTrackIndices = new Set(
-      clips.map(clip => clip.groupTrackIndex ?? clips.indexOf(clip))
-    );
-    const maxTrackIndex = Math.max(...Array.from(usedTrackIndices), 0);
-    const numTracksToShow = maxTrackIndex + 2; // Used tracks plus one extra
-    
-    const totalHeight = headerHeight + ((numTracksToShow - 1) * (clipHeight + clipSpacing)) + clipHeight;
-
-    return (
-      <div 
-        className="mb-1 relative select-none"
-        style={{ height: `${totalHeight}px` }}
-      >
-        {/* Tight Group Container - positioned and sized like collapsed state */}
-        <div
-          className={`absolute top-0 transition-all duration-200 select-none ${
-            isBeingDragged ? "opacity-80" : ""
-          } ${isSnappingToThis ? "ring-2 ring-purple-400" : ""} ${
-            selected ? "ring-2 ring-[#E961FF] ring-opacity-50" : ""
-          }`}
-          style={{
-            left: `${timeToPixel(groupStartTime)}px`,
-            width: `${groupWidth}px`,
-            height: `${totalHeight}px`,
-            zIndex: selected ? 15 : 10,
-            transform: `scaleX(${zoomLevel})`,
-          }}
-          data-group-id={group.id}
-        >
-          {/* Group Header */}
-          <div 
-            className={`h-[${headerHeight}px] relative transition-all duration-200 ${
-              selected ? 'bg-[#2b2b2b]' : 'bg-[#1d1d1d]'
-            } rounded-lg overflow-hidden mb-1`}
-          >
-            {/* Main clickable area for group selection and dragging */}
-            <div 
-              className={`absolute inset-0 hover:bg-[#2b2b2b] transition-colors ${
-                isBeingDragged ? 'cursor-grabbing' : selected ? 'cursor-grab' : 'cursor-pointer'
-              }`}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                console.log('👆 Expanded group header clicked - selecting group:', group.id);
-                onGroupClick(group.id, e);
-              }}
-              onMouseDown={(e) => {
-                // Only start drag if group is already selected
-                if (selected) {
-                  console.log('🖱️ Starting drag for selected expanded group:', group.id);
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onGroupMouseDown(group.id, e, "move");
-                } else {
-                  // If not selected, just select it (click handler will take care of this)
-                  console.log('👆 Expanded group not selected, will select on click');
-                }
-              }}
-              title={selected ? "Drag to move group" : "Click to select entire group"}
-            />
-            
-            <div className="flex items-center gap-2 px-2 py-1 h-full relative z-10">
-              {/* Chevron Icon - Down for expanded state */}
-              <button
-                className="w-4 h-4 flex items-center justify-center shrink-0 hover:bg-white/10 rounded relative z-20"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCollapseGroup(group.id);
-                }}
-                title="Collapse group"
-              >
-                <svg className="w-3 h-3 text-[#FAFAFA]" viewBox="0 0 16 16" fill="none">
-                  <path
-                    d="M4 6l4 4 4-4"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
-              
-              {/* Group Icon */}
-              <div className="w-4 h-4 flex items-center justify-center shrink-0 pointer-events-none">
-                <svg className="w-3 h-3 text-[#BBBBBB]" viewBox="0 0 16 16" fill="none">
-                  <path
-                    d="M3 4h10M3 8h10M3 12h10"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </div>
-              
-              {/* Group Name */}
-              <div className="flex-1 min-w-0 pointer-events-none">
-                <p className="text-[#bbbbbb] text-[11px] font-semibold leading-[16px] truncate">
-                  {group.name}
-                </p>
-              </div>
-            </div>
-            
-            {/* Border overlay */}
-            <div className="absolute inset-0 border border-[rgba(250,250,250,0.15)] rounded-lg pointer-events-none" />
-          </div>
-
-          {/* Track Lanes - visual guides for arranging clips */}
-          {(() => {
-            // Calculate which track indices are actually being used
-            const usedTrackIndices = new Set(
-              clips.map(clip => clip.groupTrackIndex ?? clips.indexOf(clip))
-            );
-            const maxTrackIndex = Math.max(...Array.from(usedTrackIndices), 0);
-            
-            // Show lanes for used tracks plus one extra for dropping
-            const trackLanesToShow = Array.from({ length: maxTrackIndex + 2 }, (_, i) => i);
-            
-            return trackLanesToShow.map((trackIndex) => (
-              <div
-                key={`track-lane-${trackIndex}`}
-                className="absolute border border-[rgba(250,250,250,0.05)] hover:border-[rgba(250,250,250,0.1)] transition-colors rounded"
-                style={{
-                  top: `${headerHeight + (trackIndex * (clipHeight + clipSpacing))}px`,
-                  left: '0px',
-                  right: '0px',
-                  height: `${clipHeight}px`,
-                  zIndex: 1,
-                }}
-                data-track-index={trackIndex}
-              />
-            ));
-          })()}
-
-          {/* Group Clips - positioned in their assigned tracks */}
-          {clips.map((clip) => {
-            // Use groupTrackIndex if available, otherwise assign based on order
-            const trackIndex = clip.groupTrackIndex ?? clips.indexOf(clip);
-            const clipTop = headerHeight + (trackIndex * (clipHeight + clipSpacing));
-            // Position clips relative to group start time for tight hugging
-            const relativeLeft = timeToPixel(clip.startTime - groupStartTime);
-            
-            return (
-              <div
-                key={clip.id}
-                className="absolute"
-                style={{
-                  top: `${clipTop}px`,
-                  left: `${relativeLeft}px`,
-                  width: `${timeToPixel(clip.duration)}px`,
-                  height: `${clipHeight}px`,
-                  zIndex: clip.selected ? 15 : 10,
-                  transform: `scaleX(${zoomLevel})`,
-                }}
-              >
-                <div 
-                  className="relative w-full h-full"
-                  title="Click to select this clip • Click group header to select entire group"
-                >
-                  <TimelineClip
-                    id={clip.id}
-                    fileName={String(clip.trackName || clip.name)}
-                    duration={clip.duration}
-                    startTime={clip.startTime}
-                    width={timeToPixel(clip.duration)}
-                    selected={Boolean(clip.selected)}
-                    waveformData={clip.waveformData}
-                    waveformColor={clip.waveformColor}
-                    onClipSelect={(clipId, event) => onClipClick(clipId, event)}
-                    onRangeSelect={onRangeSelect}
-                    onClipSplit={(clipId, splitPoint) => {
-                      // Handle split for grouped clips - convert split point to range
-                      const splitDuration = 0.1; // Small range around split point
-                      const startOffset = Math.max(0, splitPoint - clip.startTime - splitDuration / 2);
-                      const endOffset = Math.min(clip.duration, splitPoint - clip.startTime + splitDuration / 2);
-                      console.log(`✂️ Split grouped clip ${clipId} at ${splitPoint.toFixed(2)}s (range: ${startOffset.toFixed(2)}-${endOffset.toFixed(2)}s)`);
-                      onRangeSplit(clipId, startOffset, endOffset);
-                    }}
-                    onClipDelete={(clipId) => {
-                      // Handle delete for grouped clips - delete entire clip
-                      console.log(`🗑️ Delete grouped clip ${clipId}`);
-                      onRangeDelete(clipId, 0, clip.duration);
-                    }}
-                    onClipMouseDown={(e) => onClipMouseDown(clip.id, e, "move")}
-                  />
-                  
-                  {/* Trim handles for clips in expanded groups */}
-                  {clip.selected && !dragState.isDragging && (
-                    <>
-                      {/* Left trim handle */}
-                      <div
-                        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-30 pointer-events-auto bg-[#E961FF] opacity-0 hover:opacity-75 transition-opacity border-r border-white/20"
-                        onMouseDown={(e) => {
-                          e.stopPropagation();
-                          onClipMouseDown(clip.id, e, "trim-start");
-                        }}
-                        title="Drag to trim from start"
-                      />
-                      {/* Right trim handle */}
-                      <div
-                        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize z-30 pointer-events-auto bg-[#E961FF] opacity-0 hover:opacity-75 transition-opacity border-l border-white/20"
-                        onMouseDown={(e) => {
-                          e.stopPropagation();
-                          onClipMouseDown(clip.id, e, "trim-end");
-                        }}
-                        title="Drag to trim from end"
-                      />
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Group trim handles for expanded state */}
-          {selected && (
-            <>
-              <div 
-                className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#E961FF] opacity-0 hover:opacity-50 transition-opacity z-20"
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  onGroupMouseDown(group.id, e, "trim-start");
-                }}
-              />
-              <div 
-                className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#E961FF] opacity-0 hover:opacity-50 transition-opacity z-20"
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  onGroupMouseDown(group.id, e, "trim-end");
-                }}
-              />
-            </>
-          )}
-        </div>
-      </div>
-    );
-  }
 }
 
 
@@ -1085,8 +814,8 @@ function TrackRow({
     // determine if deselection should happen based on what was clicked
   }, []);
 
-  // Find collapsed groups that belong to this track (expanded groups are rendered separately)
-  const trackGroups = groups.filter(group => group.trackId === track.id && group.collapsed);
+  // Find groups that belong to this track
+  const trackGroups = groups.filter(group => group.trackId === track.id);
 
   return (
     <div
@@ -1097,73 +826,50 @@ function TrackRow({
       }`}
       onClick={handleTrackClick}
     >
-      {/* Render collapsed groups first */}
-      {trackGroups.map((group) => {
-        // Get all clips in this group
+      {/* Render Groups First */}
+      {trackGroups.map(group => {
         const groupClips = clips.filter(clip => clip.groupId === group.id);
-        if (groupClips.length === 0) return null;
         
-        // Calculate group bounds
-        const groupStartTime = Math.min(...groupClips.map(c => c.startTime));
-        const groupEndTime = Math.max(...groupClips.map(c => c.endTime));
-        const groupDuration = groupEndTime - groupStartTime;
-        const groupWidth = timeToPixel(groupDuration);
-        
-        // Check if group is selected
+        if (groupClips.length === 0) {
+          return null;
+        }
+
+        // Check if group is selected (all clips in group are selected)
         const isGroupSelected = group.clipIds.every(clipId =>
           clips.some(clip => clip.id === clipId && clip.selected)
         );
-
-        const isSnappingToThis = snapState.isSnapping && 
-          groupClips.some(clip => snapState.targetClipId === clip.id);
-        const isBeingDragged = groupClips.some(clip => 
-          dragState.selectedClipIds.includes(clip.id));
-
         return (
-          <div
+          <GroupTrackRow
             key={`group-${group.id}`}
-            className={`absolute top-0 h-full transition-all duration-200 select-none ${
-              isBeingDragged ? "opacity-80" : ""
-            } ${isSnappingToThis ? "ring-2 ring-purple-400" : ""}`}
-            style={{
-              left: `${timeToPixel(groupStartTime)}px`,
-              width: `${groupWidth}px`,
-              zIndex: isGroupSelected ? 15 : 10,
-              transform: `scaleX(${zoomLevel})`,
-            }}
-            data-group-id={group.id}
-          >
-            <GroupTrackRow
-              group={group}
-              clips={groupClips}
-              onGroupClick={onGroupClick}
-              onGroupMouseDown={onGroupMouseDown}
-              onExpandGroup={onExpandGroup}
-              onCollapseGroup={onCollapseGroup}
-              onClipClick={onClipClick}
-              onClipMouseDown={onClipMouseDown}
-              timeToPixel={timeToPixel}
-              zoomLevel={zoomLevel}
-              snapState={snapState}
-              dragState={dragState}
-              selected={isGroupSelected}
-              rangeSelection={rangeSelection}
-              onRangeSelect={onRangeSelect}
-              onRangeSplit={onRangeSplit}
-              onRangeDelete={onRangeDelete}
-            />
-          </div>
+            group={group}
+            clips={groupClips}
+            onGroupClick={onGroupClick}
+            onGroupMouseDown={onGroupMouseDown}
+            onExpandGroup={onExpandGroup}
+            onCollapseGroup={onCollapseGroup}
+            onClipClick={onClipClick}
+            onClipMouseDown={onClipMouseDown}
+            timeToPixel={timeToPixel}
+            zoomLevel={zoomLevel}
+            snapState={snapState}
+            dragState={dragState}
+            selected={isGroupSelected}
+            rangeSelection={rangeSelection}
+            onRangeSelect={onRangeSelect}
+            onRangeSplit={onRangeSplit}
+            onRangeDelete={onRangeDelete}
+          />
         );
       })}
 
-      {/* Render individual clips that aren't in collapsed groups */}
+      {/* Render individual ungrouped clips */}
       {clips.map((clip) => {
         const group = clip.groupId ? groups.find((g) => g.id === clip.groupId) : null;
         const isGrouped = Boolean(group);
         
-        // If this clip belongs to a collapsed group, skip rendering individual clip
+        // If this clip belongs to a group, skip rendering individual clip
         // (the group will be rendered above)
-        if (group && group.collapsed) {
+        if (group) {
           return null;
         }
         
@@ -1407,6 +1113,8 @@ function InteractiveControls({
               </button>
             )}
 
+
+
             {/* Collapse/Expand Button - Only show when grouped clips selected */}
 
 
@@ -1634,23 +1342,25 @@ export default function InteractiveTrackEditor({
   // Function to load default audio files (Roni.wav and Ingrid.wav)
   const loadDefaultAudioFiles = useCallback(async () => {
     const defaultFiles = [
-      { path: './Roni.wav', trackId: 'track-1', color: '#E961FF' },
-      { path: './Ingrid.wav', trackId: 'track-1', color: '#4CAF50' } // Put both on track-1 for grouping
+      { path: '/Roni.wav', trackId: 'track-1', color: '#E961FF' },
+      { path: '/Ingrid.wav', trackId: 'track-1', color: '#4CAF50' } // Put both on track-1 for grouping
     ];
 
     const loadedClips: TimelineClip[] = [];
     const loadedAudioTracks: any[] = [];
 
+    // Track the end time of the last clip to position clips sequentially
+    let lastClipEndTime = 0;
+
     for (const fileInfo of defaultFiles) {
       try {
-        console.log(`🎵 Loading default audio file: ${fileInfo.path}...`);
-        
         // Fetch the audio file
         const response = await fetch(fileInfo.path);
         if (!response.ok) {
           console.warn(`⚠️ Could not load ${fileInfo.path}: ${response.status}`);
           continue;
         }
+        
         
         const arrayBuffer = await response.arrayBuffer();
         
@@ -1687,13 +1397,18 @@ export default function InteractiveTrackEditor({
           }
         }
         
+        // Position clips sequentially to avoid overlap
+        const clipStartTime = lastClipEndTime;
+        const clipEndTime = clipStartTime + audioBuffer.duration;
+        lastClipEndTime = clipEndTime; // Update for next clip
+        
         // Create timeline clip
         const fileName = fileInfo.path.split('/').pop()?.replace('.wav', '') || 'Unknown';
         const newClip: TimelineClip = {
           id: `default-clip-${fileName}`,
           trackId: fileInfo.trackId,
-          startTime: 0,
-          endTime: audioBuffer.duration,
+          startTime: clipStartTime,
+          endTime: clipEndTime,
           duration: audioBuffer.duration,
           type: "audio" as const,
           name: fileName,
@@ -1875,34 +1590,31 @@ export default function InteractiveTrackEditor({
               };
             });
 
-            // Create default group (collapsed by default)
-            const defaultGroup = {
-              id: defaultGroupId,
-              name: 'Audio Group',
-              clipIds: groupedClips.map(clip => clip.id),
-              color: '#E961FF',
-              collapsed: true, // Start collapsed to show combined waveform
-              trackId: 'track-1', // Place group on first track
-            };
+                      // Create default group (collapsed by default)
+          const defaultGroup = {
+            id: defaultGroupId,
+            name: 'Audio Group',
+            clipIds: groupedClips.map(clip => clip.id),
+            color: '#E961FF',
+            trackId: 'track-1', // Place group on first track
+          };
 
-            // Recalculate timeline duration manually
-            let maxEndTime = 0;
-            updatedTracks.forEach(track => {
-              track.clips.forEach(clip => {
-                maxEndTime = Math.max(maxEndTime, clip.endTime);
-              });
+          // Recalculate timeline duration manually
+          let maxEndTime = 0;
+          updatedTracks.forEach(track => {
+            track.clips.forEach(clip => {
+              maxEndTime = Math.max(maxEndTime, clip.endTime);
             });
-            const padding = Math.max(30, maxEndTime * 0.2);
-            const newDuration = Math.max(60, maxEndTime + padding);
+          });
+          const padding = Math.max(30, maxEndTime * 0.2);
+          const newDuration = Math.max(60, maxEndTime + padding);
 
-            console.log(`✅ Created default group with ${groupedClips.length} clips (collapsed)`);
-
-            return {
-              ...prev,
-              tracks: updatedTracks,
-              groups: [defaultGroup], // Add the default group
-              totalDuration: newDuration,
-            };
+          return {
+            ...prev,
+            tracks: updatedTracks,
+            groups: [defaultGroup], // Add the default group
+            totalDuration: newDuration,
+          };
           });
           
           // Update audio tracks
@@ -3509,7 +3221,6 @@ export default function InteractiveTrackEditor({
             name: "Tracks group",
             clipIds: selectedClipIds,
             color: groupColor,
-            collapsed: false, // New groups start expanded
             trackId: groupTrackId,
           },
         ],
@@ -4584,9 +4295,11 @@ export default function InteractiveTrackEditor({
           // Check for collisions across all target positions
           if (isValidDrop) {
             collisionDetected = checkMultiTrackCollisions(clipPositions);
-            // With cascading push-down, collisions are OK - they'll be resolved automatically
-            // Only invalid if we can't find target tracks for clips
-            // isValidDrop remains true even with collisions
+            // STRICT: Block any drops that would cause collisions
+            if (collisionDetected) {
+              isValidDrop = false;
+              console.log('❌ Blocking drop due to collision detection');
+            }
           }
         }
 
@@ -4608,6 +4321,11 @@ export default function InteractiveTrackEditor({
           collisionDetected,
           showNewTrackIndicator,
         }));
+
+        // Visual feedback for invalid drops due to collision
+        if (collisionDetected && !isValidDrop) {
+          console.log('🚫 Invalid drop: clips would overlap');
+        }
 
         // Update timeline state for visual feedback - move all selected clips maintaining track relationships
         setTimelineState((prev) => {
@@ -4863,74 +4581,11 @@ export default function InteractiveTrackEditor({
         });
       }
 
-      // Handle cascading push-down after successful move operations
-      else if (dragState.isDragging && dragState.dragType === "move" && dragState.isValidDrop) {
-        console.log('🔄 Applying cascading push-down for displaced clips');
-        
-        // Get the incoming clips (the ones being moved)
-        const incomingClips = dragState.originalClips
-          .filter(clip => dragState.selectedClipIds.includes(clip.id))
-          .map(clip => {
-            // Get the current position from the timeline state (which includes drag updates)
-            const currentClip = timelineState.tracks
-              .flatMap(t => t.clips)
-              .find(c => c.id === clip.id);
-            
-            return {
-              clipId: clip.id,
-              trackId: currentClip?.trackId || clip.trackId,
-              startTime: currentClip?.startTime || clip.startTime,
-              endTime: currentClip?.endTime || clip.endTime
-            };
-          });
-        
-        // Apply cascading push-down logic
-        const { clipMoves, newTracksNeeded } = handleCascadingPushDown(incomingClips, dragState.selectedClipIds);
-        
-        if (clipMoves.length > 0 || newTracksNeeded.length > 0) {
-          setTimelineState((prev) => {
-            // Create new tracks if needed
-            let updatedTracks = [
-              ...prev.tracks.map((track) => ({
-                ...track,
-                clips: [
-                  // Keep clips that aren't being moved
-                  ...track.clips.filter(clip => 
-                    !clipMoves.some(move => move.clipId === clip.id)
-                  ),
-                  // Add clips being moved to this track
-                  ...clipMoves
-                    .filter(move => move.toTrackId === track.id)
-                    .map(move => {
-                      const originalClip = track.clips.find(c => c.id === move.clipId);
-                      return originalClip ? { ...originalClip, trackId: move.toTrackId } : null;
-                    })
-                    .filter((clip): clip is TimelineClip => clip !== null)
-                ]
-              })),
-              // Add new tracks with their clips
-              ...newTracksNeeded.map(({ track, trackId }) => ({
-                ...track,
-                clips: clipMoves
-                  .filter(move => move.toTrackId === trackId)
-                  .map(move => {
-                    const originalClip = prev.tracks
-                      .flatMap(t => t.clips)
-                      .find(c => c.id === move.clipId);
-                    return originalClip ? { ...originalClip, trackId: trackId } : null;
-                  })
-                  .filter((clip): clip is TimelineClip => clip !== null)
-              }))
-            ];
-            
-            console.log(`✅ Cascading push-down completed - moved ${clipMoves.length} clips, created ${newTracksNeeded.length} new tracks`);
-            return {
-              ...prev,
-              tracks: updatedTracks
-            };
-          });
-        }
-      }
+      // DISABLED: Cascading push-down logic - using strict collision prevention instead
+      // Clips that would overlap are now prevented from being dropped
+      // else if (dragState.isDragging && dragState.dragType === "move" && dragState.isValidDrop) {
+      //   // Cascading logic disabled to prevent overlaps
+      // }
 
       // Clean up empty tracks after any successful drop operation
       if (dragState.isDragging && dragState.dragType === "move" && dragState.isValidDrop) {
@@ -5369,54 +5024,17 @@ export default function InteractiveTrackEditor({
       >
         <div className="pl-[40px] pr-4 py-2">
           {/* First, render expanded groups separately (they need more height) */}
-          {timelineState.groups.filter(group => !group.collapsed).map(group => {
-            // Get all clips in this group
-            const groupClips = timelineState.tracks
-              .flatMap(t => t.clips)
-              .filter(clip => clip.groupId === group.id);
-            
-            if (groupClips.length === 0) return null;
-            
-            // Check if group is selected
-            const isGroupSelected = group.clipIds.every(clipId =>
-              timelineState.selectedClips.includes(clipId)
-            );
-
-            return (
-              <GroupTrackRow
-                key={`expanded-group-${group.id}`}
-                group={group}
-                clips={groupClips}
-                onGroupClick={handleGroupClick}
-                onGroupMouseDown={handleGroupMouseDown}
-                onExpandGroup={handleExpandGroup}
-                onCollapseGroup={handleCollapseGroup}
-                onClipClick={handleClipClick}
-                onClipMouseDown={handleClipMouseDown}
-                timeToPixel={timeToPixel}
-                zoomLevel={timelineState.zoomLevel}
-                snapState={snapState}
-                dragState={dragState}
-                selected={isGroupSelected}
-                rangeSelection={rangeSelection}
-                onRangeSelect={handleRangeSelect}
-                onRangeSplit={handleRangeSplit}
-                onRangeDelete={handleRangeDelete}
-              />
-            );
-          })}
-
-          {/* Then, render tracks with embedded collapsed groups */}
+          {/* Render tracks with embedded groups */}
           {timelineState.tracks.map((track, trackIndex) => {
-            // Get clips for this track, excluding clips that belong to expanded groups
-            const trackClips = track.clips.filter(clip => {
-              if (!clip.groupId) return true; // Include ungrouped clips
-              const group = timelineState.groups.find(g => g.id === clip.groupId);
-              return group && group.collapsed; // Only include clips from collapsed groups
-            });
+            // Get clips for this track, including all clips (groups are now always unified)
+            const trackClips = track.clips;
 
-            // Skip rendering if no clips in this track (after filtering out expanded group clips)
-            if (trackClips.length === 0) return null;
+            // Check if track has any content (clips or groups)
+            const trackGroups = timelineState.groups.filter(group => group.trackId === track.id);
+            const hasContent = trackClips.length > 0 || trackGroups.length > 0;
+            
+            // Skip rendering if no content in this track
+            if (!hasContent) return null;
 
             // Check if this track is a drop target for any of the dragged clips
             let isDropTarget = false;

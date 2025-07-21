@@ -28,7 +28,6 @@ interface TimelineGroup {
   name: string;
   clipIds: string[];
   color: string;
-  collapsed: boolean;
   trackId: string;
 }
 
