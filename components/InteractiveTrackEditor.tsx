@@ -333,7 +333,10 @@ function GroupTrackRow({
   if (group.collapsed) {
     // COLLAPSED STATE: Real combined waveform with speaker color coding
     const generateCombinedWaveform = () => {
-      if (!clips.length) return [];
+      if (!clips.length) {
+        console.log('❌ No clips found for waveform generation');
+        return [];
+      }
       
       const bars = [];
       const barCount = Math.max(20, Math.floor(groupWidth / 3)); // More bars for better resolution
@@ -353,6 +356,8 @@ function GroupTrackRow({
           amplitude: number;
           color: string;
         }> = [];
+        
+        // Removed excessive logging
         
         activeClips.forEach(clip => {
           if (clip.waveformData && clip.waveformData.length > 0) {
@@ -1625,7 +1630,7 @@ export default function InteractiveTrackEditor({
   const loadDefaultAudioFiles = useCallback(async () => {
     const defaultFiles = [
       { path: './Roni.wav', trackId: 'track-1', color: '#E961FF' },
-      { path: './Ingrid.wav', trackId: 'track-2', color: '#4CAF50' }
+      { path: './Ingrid.wav', trackId: 'track-1', color: '#4CAF50' } // Put both on track-1 for grouping
     ];
 
     const loadedClips: TimelineClip[] = [];
@@ -2166,10 +2171,10 @@ export default function InteractiveTrackEditor({
     return relativeY > tracksHeight && relativeY < tracksHeight + 40; // 40px zone for new track
   }, [timelineState.tracks.length, timelineState.groups.length]);
 
-  // Handle automatic track switching for non-selected clips during collisions
-  const handleAutoTrackSwitch = useCallback(
+  // Smart cascade push-down logic for non-overlapping clips
+  const handleCascadingPushDown = useCallback(
     (
-      clipPositions: Array<{
+      incomingClips: Array<{
         clipId: string;
         trackId: string;
         startTime: number;
@@ -2177,39 +2182,121 @@ export default function InteractiveTrackEditor({
       }>,
       selectedClipIds: string[]
     ) => {
-      const updatedPositions = [...clipPositions];
+      console.log('🔄 Starting cascading push-down for', incomingClips.length, 'incoming clips');
       
-      for (let i = 0; i < updatedPositions.length; i++) {
-        const pos = updatedPositions[i];
-        
-        // Skip selected clips - they have priority
-        if (selectedClipIds.includes(pos.clipId)) continue;
-        
-        // Check if this clip is colliding
-        if (checkCollision([pos.clipId], pos.trackId, pos.startTime, pos.endTime)) {
-          console.log(`🔄 Auto-switching track for non-selected clip ${pos.clipId} due to collision`);
+      // Get all current clips from state
+      const allCurrentClips = timelineState.tracks.flatMap(track => 
+        track.clips.map(clip => ({
+          clipId: clip.id,
+          trackId: clip.trackId,
+          startTime: clip.startTime,
+          endTime: clip.endTime,
+          isSelected: selectedClipIds.includes(clip.id)
+        }))
+      );
+      
+      // Function to check if two time ranges overlap
+      const timeOverlaps = (start1: number, end1: number, start2: number, end2: number) => {
+        return !(end1 <= start2 || start1 >= end2);
+      };
+      
+      // Function to find the first available track for a clip
+      const findAvailableTrackForClip = (
+        clipStartTime: number, 
+        clipEndTime: number, 
+        excludeClipIds: string[] = [],
+        startFromTrack: number = 0
+      ): string => {
+        for (let trackIndex = startFromTrack; trackIndex < timelineState.tracks.length + 5; trackIndex++) {
+          let trackId: string;
           
-          // Find an available track
-          const availableTrackId = findAvailableTrack(
-            pos.clipId,
-            pos.startTime,
-            pos.endTime,
-            [pos.trackId] // Exclude current track
+          if (trackIndex < timelineState.tracks.length) {
+            trackId = timelineState.tracks[trackIndex].id;
+          } else {
+            // Need to create a new track
+            return 'CREATE_NEW_TRACK';
+          }
+          
+          // Check if this track has space at the given time
+          const conflictingClips = allCurrentClips.filter(clip => 
+            clip.trackId === trackId && 
+            !excludeClipIds.includes(clip.clipId) &&
+            timeOverlaps(clipStartTime, clipEndTime, clip.startTime, clip.endTime)
           );
           
-          if (availableTrackId) {
-            updatedPositions[i] = {
-              ...pos,
-              trackId: availableTrackId
-            };
-            console.log(`   ✅ Moved clip ${pos.clipId} to track ${availableTrackId}`);
+          // Also check for incoming clips on the same track
+          const incomingConflicts = incomingClips.filter(incoming =>
+            incoming.trackId === trackId &&
+            !excludeClipIds.includes(incoming.clipId) &&
+            timeOverlaps(clipStartTime, clipEndTime, incoming.startTime, incoming.endTime)
+          );
+          
+          if (conflictingClips.length === 0 && incomingConflicts.length === 0) {
+            return trackId;
+          }
+        }
+        
+        return 'CREATE_NEW_TRACK';
+      };
+      
+      // Process each incoming clip and cascade existing clips if needed
+      const clipMoves: Array<{ clipId: string; fromTrackId: string; toTrackId: string; }> = [];
+      const newTracksNeeded: Array<{ trackId: string; track: TimelineTrack; }> = [];
+      
+      for (const incomingClip of incomingClips) {
+        // Find clips that would be displaced by this incoming clip
+        const displacedClips = allCurrentClips.filter(clip => 
+          clip.trackId === incomingClip.trackId && 
+          !clip.isSelected && // Don't displace selected clips
+          timeOverlaps(incomingClip.startTime, incomingClip.endTime, clip.startTime, clip.endTime)
+        );
+        
+        console.log(`   📍 Incoming clip ${incomingClip.clipId} (${incomingClip.startTime.toFixed(1)}s-${incomingClip.endTime.toFixed(1)}s) would displace ${displacedClips.length} clips on track ${incomingClip.trackId}`);
+        
+        // Find new tracks for displaced clips (cascade them down)
+        for (const displacedClip of displacedClips) {
+          const currentTrackIndex = getTrackIndex(displacedClip.trackId);
+          const availableTrackId = findAvailableTrackForClip(
+            displacedClip.startTime,
+            displacedClip.endTime,
+            [displacedClip.clipId, ...incomingClips.map(c => c.clipId)],
+            currentTrackIndex + 1 // Start looking from the track below
+          );
+          
+          if (availableTrackId === 'CREATE_NEW_TRACK') {
+            const newTrack = createNewTrack();
+            newTracksNeeded.push({ trackId: newTrack.id, track: newTrack });
+            
+            clipMoves.push({
+              clipId: displacedClip.clipId,
+              fromTrackId: displacedClip.trackId,
+              toTrackId: newTrack.id
+            });
+            
+            console.log(`   ➕ Creating new track ${newTrack.id} for displaced clip ${displacedClip.clipId}`);
+          } else {
+            clipMoves.push({
+              clipId: displacedClip.clipId,
+              fromTrackId: displacedClip.trackId,
+              toTrackId: availableTrackId
+            });
+            
+            console.log(`   ⬇️ Moving displaced clip ${displacedClip.clipId} from ${displacedClip.trackId} to ${availableTrackId}`);
+          }
+          
+          // Update our tracking of where clips are for subsequent iterations
+          const clipIndex = allCurrentClips.findIndex(c => c.clipId === displacedClip.clipId);
+          if (clipIndex !== -1) {
+            allCurrentClips[clipIndex].trackId = availableTrackId === 'CREATE_NEW_TRACK' 
+              ? newTracksNeeded[newTracksNeeded.length - 1].track.id 
+              : availableTrackId;
           }
         }
       }
       
-      return updatedPositions;
+      return { clipMoves, newTracksNeeded };
     },
-    [checkCollision, findAvailableTrack],
+    [timelineState.tracks, getTrackIndex, createNewTrack],
   );
 
   // Find snap points for a given clip and position
@@ -4064,34 +4151,56 @@ export default function InteractiveTrackEditor({
         // Cycle through colors for each new track
         const trackColor = trackColors[audioTracks.length % trackColors.length];
         
-        // Add to timeline
+        // Smart insertion: place at playhead position in first available track
         setTimelineState((prev) => {
+          const playheadPosition = prev.playheadPosition;
+          const clipStartTime = playheadPosition;
+          const clipEndTime = playheadPosition + audioBuffer.duration;
+          
+          // Function to check if a track has space at the given time
+          const trackHasSpace = (track: TimelineTrack): boolean => {
+            return !track.clips.some(clip => 
+              !(clipEndTime <= clip.startTime || clipStartTime >= clip.endTime) // Check for overlap
+            );
+          };
+          
+          // Find the first available track
+          let targetTrack = prev.tracks.find(trackHasSpace);
+          let updatedTracks = [...prev.tracks];
+          
+          // If no available track found, create a new one
+          if (!targetTrack) {
+            const newTrack = createNewTrack();
+            targetTrack = newTrack;
+            updatedTracks.push(newTrack);
+            console.log(`➕ Created new track ${newTrack.id} for clip at playhead position ${playheadPosition.toFixed(2)}s`);
+          } else {
+            console.log(`📍 Placing clip in existing track ${targetTrack.id} at playhead position ${playheadPosition.toFixed(2)}s`);
+          }
+
           const newClip = {
             id: `audio-track-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            trackId: "track-1", // Add to first track for now
-            startTime: 0,
-            endTime: audioBuffer.duration,
+            trackId: targetTrack.id,
+            startTime: clipStartTime,
+            endTime: clipEndTime,
             duration: audioBuffer.duration,
             type: "audio" as const,
             name: file.name.replace(/\.[^/.]+$/, ""),
             color: trackColor,
             selected: false,
-            originalWidth: Math.floor(audioBuffer.duration * 20), // Scale factor for visualization
+            originalWidth: Math.floor(audioBuffer.duration * 20),
             trackName: file.name.replace(/\.[^/.]+$/, ""),
             waveformData: waveformData,
             waveformColor: trackColor,
             sourceStartOffset: 0,
           };
 
-          const updatedTracks = prev.tracks.map((track, index) => {
-            if (index === 0) {
-              return {
-                ...track,
-                clips: [...track.clips, newClip],
-              };
-            }
-            return track;
-          });
+          // Add the clip to the target track
+          updatedTracks = updatedTracks.map(track => 
+            track.id === targetTrack!.id 
+              ? { ...track, clips: [...track.clips, newClip] }
+              : track
+          );
 
           // Recalculate timeline duration
           const newDuration = calculateTimelineDuration(updatedTracks);
@@ -4224,11 +4333,19 @@ export default function InteractiveTrackEditor({
           //     ),
           // );
 
-          originalClips.forEach((c) => {
-            const clipTrackIndex = getTrackIndex(c.trackId);
-            const trackOffset =
-              clipTrackIndex - primaryClipTrackIndex;
-            trackOffsets.set(c.id, trackOffset);
+          originalClips.forEach((c, index) => {
+            // For clips in the same group but same track, use their groupTrackIndex for offset
+            if (c.groupId && c.groupTrackIndex !== undefined) {
+              // Use groupTrackIndex as offset for grouped clips on same track
+              const primaryGroupTrackIndex = clip.groupTrackIndex || 0;
+              const trackOffset = (c.groupTrackIndex || 0) - primaryGroupTrackIndex;
+              trackOffsets.set(c.id, trackOffset);
+            } else {
+              // Use normal track-based offset for ungrouped clips
+              const clipTrackIndex = getTrackIndex(c.trackId);
+              const trackOffset = clipTrackIndex - primaryClipTrackIndex;
+              trackOffsets.set(c.id, trackOffset);
+            }
           });
 
           setDragState({
@@ -4434,22 +4551,10 @@ export default function InteractiveTrackEditor({
           }> = [];
 
           dragState.originalClips.forEach((clip) => {
-            // Check if this is part of a collapsed group
-            const dragClipGroup = clip.groupId ? timelineState.groups.find(g => g.id === clip.groupId) : null;
-            const isCollapsedGroup = dragClipGroup && dragClipGroup.collapsed;
-            
-            let targetTrack;
-            if (isCollapsedGroup) {
-              // For collapsed groups, ALL clips target the primary track
-              targetTrack = getTrackByIndex(primaryTargetTrackIndex);
-              console.log(`🎯 Collapsed group clip ${clip.id} targeting primary track index ${primaryTargetTrackIndex} (track ID: ${targetTrack?.id})`);
-            } else {
-              // For expanded groups or ungrouped clips, maintain relative track relationships
-              const trackOffset = dragState.trackOffsets.get(clip.id) || 0;
-              const targetTrackIndex = primaryTargetTrackIndex + trackOffset;
-              targetTrack = getTrackByIndex(targetTrackIndex);
-              console.log(`📍 Clip ${clip.id} targeting track index ${targetTrackIndex} (offset: ${trackOffset}, track ID: ${targetTrack?.id})`);
-            }
+            // For move operations, calculate target track based on track offsets
+            const trackOffset = dragState.trackOffsets.get(clip.id) || 0;
+            const targetTrackIndex = primaryTargetTrackIndex + trackOffset;
+            const targetTrack = getTrackByIndex(targetTrackIndex);
 
             if (targetTrack) {
               if (clip.id === dragState.clipId) {
@@ -4488,7 +4593,9 @@ export default function InteractiveTrackEditor({
           // Check for collisions across all target positions
           if (isValidDrop) {
             collisionDetected = checkMultiTrackCollisions(clipPositions);
-            isValidDrop = !collisionDetected;
+            // With cascading push-down, collisions are OK - they'll be resolved automatically
+            // Only invalid if we can't find target tracks for clips
+            // isValidDrop remains true even with collisions
           }
         }
 
@@ -4529,137 +4636,27 @@ export default function InteractiveTrackEditor({
               let clipTargetTrackId = originalClip.trackId;
 
               if (dragState.dragType === "move") {
-                // Check if this is a collapsed group - all clips should move to the same target track
-                const targetClipGroup = clip.groupId ? timelineState.groups.find(g => g.id === clip.groupId) : null;
-                const isCollapsedGroup = targetClipGroup && targetClipGroup.collapsed;
-                
-                console.log(`🎯 Visual feedback for clip ${clip.id}: groupId=${clip.groupId}, collapsed=${isCollapsedGroup}, primaryTargetTrackIndex=${primaryTargetTrackIndex}`);
-                
-                if (isCollapsedGroup) {
-                  // For collapsed groups, ALL clips move to the primary target track
-                  const targetTrack = getTrackByIndex(primaryTargetTrackIndex);
-                  console.log(`📍 Collapsed group clip ${clip.id} targeting track index ${primaryTargetTrackIndex} -> track ${targetTrack?.id} (from ${clip.trackId})`);
-                  
-                  if (targetTrack) {
-                    clipTargetTrackId = targetTrack.id;
-                    
-                    // Calculate time offset
-                    const timeOffset =
-                      newStartTime +
-                      snapAdjustment -
-                      primaryClip.startTime;
-                    clipNewStartTime = Math.max(
-                      0,
-                      originalClip.startTime + timeOffset,
-                    );
-                    clipNewEndTime =
-                      clipNewStartTime + originalClip.duration;
-                    
-                    console.log(`   ✅ Assigning clip ${clip.id} to track ${clipTargetTrackId} at time ${clipNewStartTime.toFixed(2)}s`);
-                  } else {
-                    // Invalid target track - keep original position
-                    clipTargetTrackId = originalClip.trackId;
-                    clipNewStartTime = originalClip.startTime;
-                    clipNewEndTime = originalClip.endTime;
-                    console.log(`   ❌ Invalid target track, keeping clip ${clip.id} on original track ${clipTargetTrackId}`);
-                  }
+                // Simplified drag logic - calculate target track based on track offset
+                const trackOffset = dragState.trackOffsets.get(clip.id) || 0;
+                const targetTrackIndex = primaryTargetTrackIndex + trackOffset;
+                const targetTrack = getTrackByIndex(targetTrackIndex);
+
+                if (targetTrack) {
+                  clipTargetTrackId = targetTrack.id;
+
+                  // Calculate time offset
+                  const timeOffset = newStartTime + snapAdjustment - primaryClip.startTime;
+                  clipNewStartTime = Math.max(0, originalClip.startTime + timeOffset);
+                  clipNewEndTime = clipNewStartTime + originalClip.duration;
                 } else {
-                  // For expanded groups or ungrouped clips, check if we're moving within group tracks
-                  const isExpandedGroup = targetClipGroup && !targetClipGroup.collapsed;
-                  
-                  if (isExpandedGroup) {
-                    // Check if we're dragging within the same group
-                    const groupTrackIndex = getGroupTrackIndexAtY(targetClipGroup.id, event.clientY);
-                    
-                    if (groupTrackIndex !== null) {
-                      // Moving within the group - update groupTrackIndex but keep same trackId
-                      clipTargetTrackId = originalClip.trackId; // Stay in the same main track
-                      
-                      // Calculate time offset
-                      const timeOffset =
-                        newStartTime +
-                        snapAdjustment -
-                        primaryClip.startTime;
-                      clipNewStartTime = Math.max(
-                        0,
-                        originalClip.startTime + timeOffset,
-                      );
-                      clipNewEndTime =
-                        clipNewStartTime + originalClip.duration;
-                      
-                      console.log(`🎯 Moving clip ${clip.id} to group track ${groupTrackIndex}`);
-                    } else {
-                      // Moving outside the group - use normal track targeting
-                      const trackOffset =
-                        dragState.trackOffsets.get(clip.id) || 0;
-                      const targetTrackIndex =
-                        primaryTargetTrackIndex + trackOffset;
-                      const targetTrack =
-                        getTrackByIndex(targetTrackIndex);
-
-                      if (targetTrack) {
-                        clipTargetTrackId = targetTrack.id;
-
-                        // Calculate time offset
-                        const timeOffset =
-                          newStartTime +
-                          snapAdjustment -
-                          primaryClip.startTime;
-                        clipNewStartTime = Math.max(
-                          0,
-                          originalClip.startTime + timeOffset,
-                        );
-                        clipNewEndTime =
-                          clipNewStartTime + originalClip.duration;
-                      } else {
-                        // Invalid target track - keep original position
-                        clipTargetTrackId = originalClip.trackId;
-                        clipNewStartTime = originalClip.startTime;
-                        clipNewEndTime = originalClip.endTime;
-                      }
-                    }
-                  } else {
-                    // For ungrouped clips, maintain relative track relationships
-                    const trackOffset =
-                      dragState.trackOffsets.get(clip.id) || 0;
-                    const targetTrackIndex =
-                      primaryTargetTrackIndex + trackOffset;
-                    const targetTrack =
-                      getTrackByIndex(targetTrackIndex);
-
-                    if (targetTrack) {
-                      clipTargetTrackId = targetTrack.id;
-
-                      // Calculate time offset
-                      const timeOffset =
-                        newStartTime +
-                        snapAdjustment -
-                        primaryClip.startTime;
-                      clipNewStartTime = Math.max(
-                        0,
-                        originalClip.startTime + timeOffset,
-                      );
-                      clipNewEndTime =
-                        clipNewStartTime + originalClip.duration;
-                    } else {
-                      // Invalid target track - keep original position
-                      clipTargetTrackId = originalClip.trackId;
-                      clipNewStartTime = originalClip.startTime;
-                      clipNewEndTime = originalClip.endTime;
-                    }
-                  }
+                  // Invalid target track - keep original position
+                  clipTargetTrackId = originalClip.trackId;
+                  clipNewStartTime = originalClip.startTime;
+                  clipNewEndTime = originalClip.endTime;
                 }
 
-                // Check if we need to update groupTrackIndex for expanded group movement
+                // Keep existing groupTrackIndex
                 let updatedGroupTrackIndex = clip.groupTrackIndex;
-                const currentClipGroup = clip.groupId ? timelineState.groups.find(g => g.id === clip.groupId) : null;
-                const isCurrentExpandedGroup = currentClipGroup && !currentClipGroup.collapsed;
-                if (isCurrentExpandedGroup) {
-                  const groupTrackIndex = getGroupTrackIndexAtY(currentClipGroup.id, event.clientY);
-                  if (groupTrackIndex !== null) {
-                    updatedGroupTrackIndex = groupTrackIndex;
-                  }
-                }
 
                 return {
                   ...clip,
@@ -4875,95 +4872,73 @@ export default function InteractiveTrackEditor({
         });
       }
 
-      // Handle auto-track switching after successful move operations
+      // Handle cascading push-down after successful move operations
       else if (dragState.isDragging && dragState.dragType === "move" && dragState.isValidDrop) {
-        console.log('🔄 Checking for auto-track switching after successful drop');
+        console.log('🔄 Applying cascading push-down for displaced clips');
         
-        setTimelineState((prev) => {
-          const clipsToMove: Array<{ clip: any; fromTrackId: string; toTrackId: string; }> = [];
-          const newTracksNeeded: Array<{ trackId: string; track: TimelineTrack; }> = [];
-          
-          // First pass: identify clips that need to be moved
-          prev.tracks.forEach((track) => {
-            track.clips.forEach((clip) => {
-              // Skip selected clips - they were moved intentionally
-              if (dragState.selectedClipIds.includes(clip.id)) return;
-              
-              // Check if this non-selected clip is now colliding with any other clips
-              const hasCollision = prev.tracks
-                .flatMap(t => t.clips)
-                .some(otherClip => 
-                  otherClip.id !== clip.id && // Don't check against itself
-                  otherClip.trackId === track.id && // Same track
-                  !(clip.endTime <= otherClip.startTime || clip.startTime >= otherClip.endTime) // Time overlap
-                );
-              
-                              if (hasCollision) {
-                console.log(`🔄 Non-selected clip ${clip.id} is colliding, finding available track`);
-                
-                // Find an available track for this clip
-                const availableTrackId = findAvailableTrack(
-                  clip.id,
-                  clip.startTime,
-                  clip.endTime,
-                  [track.id]
-                );
-                
-                if (availableTrackId === 'CREATE_NEW_TRACK') {
-                  // Create a new track
-                  const newTrack = createNewTrack();
-                  newTracksNeeded.push({ trackId: newTrack.id, track: newTrack });
-                  
-                  clipsToMove.push({
-                    clip: { ...clip, trackId: newTrack.id },
-                    fromTrackId: track.id,
-                    toTrackId: newTrack.id
-                  });
-                  console.log(`   ✅ Will create new track ${newTrack.id} and move clip ${clip.id} there`);
-                } else if (availableTrackId) {
-                  clipsToMove.push({
-                    clip: { ...clip, trackId: availableTrackId },
-                    fromTrackId: track.id,
-                    toTrackId: availableTrackId
-                  });
-                  console.log(`   ✅ Will move clip ${clip.id} from ${track.id} to ${availableTrackId}`);
-                }
-              }
-            });
+        // Get the incoming clips (the ones being moved)
+        const incomingClips = dragState.originalClips
+          .filter(clip => dragState.selectedClipIds.includes(clip.id))
+          .map(clip => {
+            // Get the current position from the timeline state (which includes drag updates)
+            const currentClip = timelineState.tracks
+              .flatMap(t => t.clips)
+              .find(c => c.id === clip.id);
+            
+            return {
+              clipId: clip.id,
+              trackId: currentClip?.trackId || clip.trackId,
+              startTime: currentClip?.startTime || clip.startTime,
+              endTime: currentClip?.endTime || clip.endTime
+            };
           });
-          
-          if (clipsToMove.length === 0) return prev;
-          
-          // Second pass: create new tracks and update existing ones
-          let updatedTracks = [
-            ...prev.tracks.map((track) => ({
-              ...track,
-              clips: [
-                // Keep clips that aren't being moved
-                ...track.clips.filter(clip => 
-                  !clipsToMove.some(move => move.clip.id === clip.id)
-                ),
-                // Add clips being moved to this track
-                ...clipsToMove
-                  .filter(move => move.toTrackId === track.id)
-                  .map(move => move.clip)
-              ]
-            })),
-            // Add new tracks with their clips
-            ...newTracksNeeded.map(({ track, trackId }) => ({
-              ...track,
-              clips: clipsToMove
-                .filter(move => move.toTrackId === trackId)
-                .map(move => move.clip)
-            }))
-          ];
-          
-          console.log(`✅ Auto-track switching completed - moved ${clipsToMove.length} clips, created ${newTracksNeeded.length} new tracks`);
-          return {
-            ...prev,
-            tracks: updatedTracks
-          };
-        });
+        
+        // Apply cascading push-down logic
+        const { clipMoves, newTracksNeeded } = handleCascadingPushDown(incomingClips, dragState.selectedClipIds);
+        
+        if (clipMoves.length > 0 || newTracksNeeded.length > 0) {
+          setTimelineState((prev) => {
+            // Create new tracks if needed
+            let updatedTracks = [
+              ...prev.tracks.map((track) => ({
+                ...track,
+                clips: [
+                  // Keep clips that aren't being moved
+                  ...track.clips.filter(clip => 
+                    !clipMoves.some(move => move.clipId === clip.id)
+                  ),
+                  // Add clips being moved to this track
+                  ...clipMoves
+                    .filter(move => move.toTrackId === track.id)
+                    .map(move => {
+                      const originalClip = track.clips.find(c => c.id === move.clipId);
+                      return originalClip ? { ...originalClip, trackId: move.toTrackId } : null;
+                    })
+                    .filter((clip): clip is TimelineClip => clip !== null)
+                ]
+              })),
+              // Add new tracks with their clips
+              ...newTracksNeeded.map(({ track, trackId }) => ({
+                ...track,
+                clips: clipMoves
+                  .filter(move => move.toTrackId === trackId)
+                  .map(move => {
+                    const originalClip = prev.tracks
+                      .flatMap(t => t.clips)
+                      .find(c => c.id === move.clipId);
+                    return originalClip ? { ...originalClip, trackId: trackId } : null;
+                  })
+                  .filter((clip): clip is TimelineClip => clip !== null)
+              }))
+            ];
+            
+            console.log(`✅ Cascading push-down completed - moved ${clipMoves.length} clips, created ${newTracksNeeded.length} new tracks`);
+            return {
+              ...prev,
+              tracks: updatedTracks
+            };
+          });
+        }
       }
 
       // Clean up empty tracks after any successful drop operation
@@ -5039,7 +5014,7 @@ export default function InteractiveTrackEditor({
     getTrackAtY,
     checkCollision,
     getClipsInGroup,
-    handleAutoTrackSwitch,
+    handleCascadingPushDown,
     findAvailableTrack,
     createNewTrack,
     removeEmptyTracks,
