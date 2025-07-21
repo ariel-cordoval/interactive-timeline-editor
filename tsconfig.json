@@ -30,6 +30,5 @@
     }
   },
   "include": ["*.tsx", "components/**/*.ts", "components/**/*.tsx", "imports/**/*.ts", "imports/**/*.tsx"],
-  "exclude": ["components/ui/**/*"],
   "references": [{ "path": "./tsconfig.node.json" }]
 } 

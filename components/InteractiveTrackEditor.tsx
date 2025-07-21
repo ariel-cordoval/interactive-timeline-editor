@@ -1999,33 +1999,6 @@ export default function InteractiveTrackEditor({
     [timelineState.tracks],
   );
 
-  // Get group track index at Y position within a group
-  const getGroupTrackIndexAtY = useCallback(
-    (groupId: string, y: number) => {
-      if (!trackAreaRef.current) return null;
-
-      // Find the group element
-      const groupElement = trackAreaRef.current.querySelector(`[data-group-id="${groupId}"]`);
-      if (!groupElement) return null;
-      
-      const groupRect = groupElement.getBoundingClientRect();
-      const groupRelativeY = y - groupRect.top;
-      
-      // Calculate track index within the group (match expanded group constants)
-      const headerHeight = 28; // Group header height
-      const clipHeight = 58;
-      const clipSpacing = 4;
-      const trackHeight = clipHeight + clipSpacing;
-      
-      if (groupRelativeY < headerHeight) return null; // In header area
-      
-      const trackIndex = Math.floor((groupRelativeY - headerHeight) / trackHeight);
-      console.log(`📍 Group track index: groupRelativeY=${groupRelativeY}, trackIndex=${trackIndex}`);
-      
-      return trackIndex >= 0 ? trackIndex : null;
-    },
-    [],
-  );
 
   // Check for collision with existing clips
   const checkCollision = useCallback(
@@ -4335,7 +4308,7 @@ export default function InteractiveTrackEditor({
           //     ),
           // );
 
-          originalClips.forEach((c, index) => {
+          originalClips.forEach((c) => {
             // For clips in the same group but same track, use their groupTrackIndex for offset
             if (c.groupId && c.groupTrackIndex !== undefined) {
               // Use groupTrackIndex as offset for grouped clips on same track
