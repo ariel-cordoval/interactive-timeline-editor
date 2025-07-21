@@ -1285,11 +1285,14 @@ interface InteractiveControlsProps {
   selectedClips: string[];
   zoomLevel: number;
   hasGroupedSelection: boolean;
-  timelineState: TimelineState;
+
   rangeSelection: { clipId: string; startOffset: number; endOffset: number; } | null;
   onRangeSplit: (clipId: string, startOffset: number, endOffset: number) => void;
   onRangeDelete: (clipId: string, startOffset: number, endOffset: number) => void;
   onClearRangeSelection: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
+  hasClipboardData: boolean;
 }
 
 function InteractiveControls({
@@ -1307,11 +1310,13 @@ function InteractiveControls({
   selectedClips,
   zoomLevel,
   hasGroupedSelection,
-  timelineState: _timelineState,
   rangeSelection,
   onRangeSplit,
   onRangeDelete,
   onClearRangeSelection,
+  onCopy,
+  onPaste,
+  hasClipboardData,
 }: InteractiveControlsProps) {
   const formatTime = (seconds: number) => {
     const minutes = Math.floor(seconds / 60);
@@ -1780,6 +1785,17 @@ export default function InteractiveTrackEditor({
     clipId: string;
     startOffset: number;
     endOffset: number;
+  } | null>(null);
+  
+  // Clipboard state for copy/paste operations
+  const [clipboardData, setClipboardData] = useState<{
+    clipId: string;
+    startOffset: number;
+    endOffset: number;
+    audioData?: Float32Array;
+    waveformData?: Float32Array;
+    duration: number;
+    originalClip: TimelineClip;
   } | null>(null);
   
   const [dragState, setDragState] = useState<DragState>({
@@ -2542,10 +2558,10 @@ export default function InteractiveTrackEditor({
               })),
             }));
             
-            // Also clear range selection
-            setRangeSelection(null);
+            // Don't clear range selection when deselecting clips - range selection should be independent
+            // setRangeSelection(null);
             
-            console.log(`🔄 Deselected clip ${clipId} and its group members`);
+
           }
           // If clip is not selected, do nothing (let normal clip selection handle it)
         } else if (groupId) {
@@ -2569,10 +2585,10 @@ export default function InteractiveTrackEditor({
                 })),
               }));
               
-              // Also clear range selection
-              setRangeSelection(null);
+              // Don't clear range selection when deselecting clips - range selection should be independent
+              // setRangeSelection(null);
               
-              console.log(`🔄 Deselected collapsed group ${groupId}`);
+
             }
           }
           // If group is not selected, do nothing (let normal group selection handle it)
@@ -2590,10 +2606,10 @@ export default function InteractiveTrackEditor({
             })),
           }));
           
-          // Also clear range selection
-          setRangeSelection(null);
+          // Don't clear range selection when deselecting clips - range selection should be independent
+          // setRangeSelection(null);
           
-          console.log('🔄 Deselected all clips and cleared range selection');
+
         }
       }
     },
@@ -5040,7 +5056,6 @@ export default function InteractiveTrackEditor({
   // Clear range selection
   const clearRangeSelection = useCallback(() => {
     setRangeSelection(null);
-    console.log('🔄 Range selection cleared');
   }, []);
 
   // Enhanced keyboard shortcuts that work with range selections
@@ -5054,7 +5069,7 @@ export default function InteractiveTrackEditor({
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault();
         if (rangeSelection) {
-          console.log(`🗑️ Keyboard delete range: ${rangeSelection.clipId}`);
+  
           handleRangeDelete(rangeSelection.clipId, rangeSelection.startOffset, rangeSelection.endOffset);
           setRangeSelection(null);
         } else if (timelineState.selectedClips.length > 0) {
@@ -5063,7 +5078,7 @@ export default function InteractiveTrackEditor({
       } else if ((event.key === 's' || event.key === 'S') && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         if (rangeSelection) {
-          console.log(`✂️ Keyboard split range: ${rangeSelection.clipId}`);
+
           handleRangeSplit(rangeSelection.clipId, rangeSelection.startOffset, rangeSelection.endOffset);
           setRangeSelection(null);
         } else if (timelineState.selectedClips.length > 0) {
@@ -5071,15 +5086,20 @@ export default function InteractiveTrackEditor({
         }
       } else if (event.key === 'Escape') {
         event.preventDefault();
-        if (rangeSelection) {
-          clearRangeSelection();
-        } else {
-          // Clear clip selection
-          setTimelineState(prev => ({
-            ...prev,
-            selectedClips: []
-          }));
-        }
+        // Clear all selections
+        setTimelineState((prev) => ({
+          ...prev,
+          selectedClips: [],
+          tracks: prev.tracks.map((track) => ({
+            ...track,
+            clips: track.clips.map((clip) => ({
+              ...clip,
+              selected: false,
+            })),
+          })),
+        }));
+        clearRangeSelection();
+            // Copy/paste handled by dedicated handler below
       } else if (event.key === ' ') {
         event.preventDefault();
         handlePlayPause();
@@ -5094,7 +5114,193 @@ export default function InteractiveTrackEditor({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [rangeSelection, timelineState.selectedClips, handleRangeDelete, handleRangeSplit, handleDelete, handleSplit, handlePlayPause, clearRangeSelection]);
+      }, [
+      rangeSelection, 
+      timelineState.selectedClips, 
+      handleRangeDelete, 
+      handleRangeSplit, 
+      handleDelete, 
+      handleSplit, 
+      handlePlayPause, 
+      clearRangeSelection, 
+      handleZoomIn, 
+      handleZoomOut,
+      hasGroupedSelection,
+      handleUngroup,
+      handleGroup
+    ]);
+
+  // Handle copy operation (Cmd+C)
+  const handleCopy = useCallback(() => {
+    console.log('📋 Copy function called!');
+    console.log('📍 Range selection status:', rangeSelection);
+    
+    if (!rangeSelection) {
+      console.log('❌ No range selected to copy');
+      return;
+    }
+    
+    console.log('✅ Range selection found, proceeding with copy...');
+
+    const allClips = timelineState.tracks.flatMap((track) => track.clips);
+    const clip = allClips.find(c => c.id === rangeSelection.clipId);
+    
+    if (!clip) {
+      console.log('❌ Clip not found for copy operation');
+      return;
+    }
+
+    // Find the audio data for this clip
+    const audioTrack = audioTracks.find(track => track.clipId === clip.id);
+    
+    if (audioTrack && audioTrack.audioData) {
+      const sampleRate = audioTrack.sampleRate || 44100;
+      const originalData = audioTrack.audioData;
+      
+      // Extract the selected range from audio data
+      const sourceStartSample = Math.floor((clip.sourceStartOffset + rangeSelection.startOffset) * sampleRate);
+      const sourceEndSample = Math.floor((clip.sourceStartOffset + rangeSelection.endOffset) * sampleRate);
+      const rangeDuration = rangeSelection.endOffset - rangeSelection.startOffset;
+      
+      const rangeAudioData = originalData.slice(sourceStartSample, sourceEndSample);
+      const rangeWaveformData = generateWaveformFromAudio(rangeAudioData, sampleRate);
+      
+      setClipboardData({
+        clipId: clip.id,
+        startOffset: rangeSelection.startOffset,
+        endOffset: rangeSelection.endOffset,
+        audioData: rangeAudioData,
+        waveformData: rangeWaveformData,
+        duration: rangeDuration,
+        originalClip: clip,
+      });
+      
+      console.log(`📋 Copied range WITH audio: ${rangeSelection.startOffset.toFixed(2)}s - ${rangeSelection.endOffset.toFixed(2)}s (${rangeDuration.toFixed(2)}s duration)`);
+    } else {
+      console.log('⚠️ No audio data found, copying range metadata only');
+      
+      const metadataOnly = {
+        clipId: clip.id,
+        startOffset: rangeSelection.startOffset,
+        endOffset: rangeSelection.endOffset,
+        duration: rangeSelection.endOffset - rangeSelection.startOffset,
+        originalClip: clip,
+      };
+      
+      console.log('📋 Setting clipboard data (metadata only):', metadataOnly);
+      setClipboardData(metadataOnly);
+      console.log('📋 Clipboard data set successfully');
+    }
+  }, [rangeSelection, timelineState.tracks, audioTracks, generateWaveformFromAudio]);
+
+  // Handle paste operation (Cmd+V)
+  const handlePaste = useCallback(() => {
+    if (!clipboardData) {
+      console.log('📋 No data in clipboard to paste');
+      return;
+    }
+
+    const pasteTime = timelineState.playheadPosition;
+    const newClipId = `${clipboardData.originalClip.id}-paste-${Date.now()}`;
+    
+    console.log(`📋 Pasting range at playhead: ${pasteTime.toFixed(2)}s`);
+    
+    // Create new clip from clipboard data
+    const newClip: TimelineClip = {
+      ...clipboardData.originalClip,
+      id: newClipId,
+      startTime: pasteTime,
+      endTime: pasteTime + clipboardData.duration,
+      duration: clipboardData.duration,
+      selected: true, // Select the newly pasted clip
+      waveformData: clipboardData.waveformData || clipboardData.originalClip.waveformData,
+      sourceStartOffset: clipboardData.originalClip.sourceStartOffset + clipboardData.startOffset,
+    };
+
+    // Find the best track to place the new clip (avoid overlaps)
+    let targetTrackId = clipboardData.originalClip.trackId;
+    let canPlaceInOriginalTrack = true;
+    
+    const originalTrack = timelineState.tracks.find(t => t.id === targetTrackId);
+    if (originalTrack) {
+      // Check for overlaps in the original track
+      const hasOverlap = originalTrack.clips.some(existingClip => 
+        pasteTime < existingClip.endTime && (pasteTime + clipboardData.duration) > existingClip.startTime
+      );
+      
+      if (hasOverlap) {
+        canPlaceInOriginalTrack = false;
+        console.log('⚠️ Overlap detected in original track, finding alternative...');
+        
+        // Try to find an available track
+        for (const track of timelineState.tracks) {
+          const trackHasOverlap = track.clips.some(existingClip => 
+            pasteTime < existingClip.endTime && (pasteTime + clipboardData.duration) > existingClip.startTime
+          );
+          
+          if (!trackHasOverlap) {
+            targetTrackId = track.id;
+            canPlaceInOriginalTrack = true;
+            console.log(`✅ Found available track: ${track.name}`);
+            break;
+          }
+        }
+      }
+    }
+
+    if (!canPlaceInOriginalTrack) {
+      console.log('❌ No available track found for paste operation');
+      return;
+    }
+
+    // Update timeline state
+    setTimelineState((prev) => {
+      const newTracks = prev.tracks.map(track => {
+        if (track.id === targetTrackId) {
+          return {
+            ...track,
+            clips: [...track.clips, newClip]
+          };
+        }
+        return {
+          ...track,
+          clips: track.clips.map(clip => ({
+            ...clip,
+            selected: false // Deselect other clips
+          }))
+        };
+      });
+
+      return {
+        ...prev,
+        tracks: newTracks,
+        selectedClips: [newClipId], // Select the newly pasted clip
+        totalDuration: calculateTimelineDuration(newTracks),
+      };
+    });
+
+    // Add audio data for the new clip if available
+    if (clipboardData.audioData) {
+      setAudioTracks(prev => [
+        ...prev,
+        {
+          clipId: newClipId,
+          audioData: clipboardData.audioData,
+          sampleRate: 44100, // Default sample rate
+        }
+      ]);
+    }
+
+         console.log(`✅ Pasted clip ${newClipId} at ${pasteTime.toFixed(2)}s`);
+   }, [clipboardData, timelineState.playheadPosition, timelineState.tracks, calculateTimelineDuration]);
+
+
+
+  // Simple test instructions
+
+
+  // Debug range selection changes
+
 
   return (
     <div
@@ -5117,11 +5323,13 @@ export default function InteractiveTrackEditor({
         selectedClips={timelineState.selectedClips}
         zoomLevel={timelineState.zoomLevel}
         hasGroupedSelection={hasGroupedSelection()}
-        timelineState={timelineState}
         rangeSelection={rangeSelection}
         onRangeSplit={handleRangeSplit}
         onRangeDelete={handleRangeDelete}
         onClearRangeSelection={clearRangeSelection}
+        onCopy={handleCopy}
+        onPaste={handlePaste}
+        hasClipboardData={clipboardData !== null}
       />
 
       {/* Timeline Ruler */}

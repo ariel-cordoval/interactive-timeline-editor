@@ -174,6 +174,7 @@ export default function TimelineClip({
 
   // Handle content area selection
   const handleContentMouseDown = useCallback((e: React.MouseEvent) => {
+    
     if (!contentRef.current) return;
     
     e.preventDefault();
@@ -204,6 +205,7 @@ export default function TimelineClip({
       
       if (deltaX > 3 || deltaY > 3) {
         hasMoved = true;
+  
         
         // Continue with range selection
         const rect = contentRef.current.getBoundingClientRect();
@@ -211,6 +213,7 @@ export default function TimelineClip({
         const currentOffset = Math.max(0, Math.min(duration, (currentX / rect.width) * duration));
         currentSelectionEnd = currentOffset;  // Update local variable
         setSelectionEnd(currentOffset);  // Also update React state for visual feedback
+  
       }
     };
 
@@ -229,9 +232,10 @@ export default function TimelineClip({
         // Use local variables instead of React state to avoid timing issues
         const start = Math.min(currentSelectionStart, currentSelectionEnd);
         const end = Math.max(currentSelectionStart, currentSelectionEnd);
+        const duration = Math.abs(end - start);
         
         // Only trigger range select if there's a meaningful selection (> 0.1 seconds)
-        if (Math.abs(end - start) > 0.1) {
+        if (duration > 0.1) {
           onRangeSelect?.(id, start, end);
         } else {
           // Clear selection if it's too small

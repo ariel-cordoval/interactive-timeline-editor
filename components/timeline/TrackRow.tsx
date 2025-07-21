@@ -1,12 +1,6 @@
 import React from 'react';
-import { 
-  TimelineTrack, 
-  TimelineClip, 
-  TimelineGroup, 
-  SnapState, 
-  DragState, 
-  RangeSelection 
-} from '../types/timeline';
+import { TimelineTrack, TimelineClip, TimelineGroup, DragState, SnapState, RangeSelection } from '../types/timeline';
+import TimelineClipComponent from '../TimelineClip';
 
 interface TrackRowProps {
   track: TimelineTrack;
@@ -41,9 +35,11 @@ const TrackRow: React.FC<TrackRowProps> = ({
   isValidDropTarget,
   groups,
   rangeSelection,
+  onRangeSelect,
   onGroupClick,
   onGroupMouseDown,
   onExpandGroup,
+  onCollapseGroup,
 }) => {
   // Filter clips that belong to collapsed groups
   const visibleClips = clips.filter(clip => {
@@ -111,77 +107,44 @@ const TrackRow: React.FC<TrackRowProps> = ({
   const renderClip = (clip: TimelineClip) => {
     const clipWidth = timeToPixel(clip.duration);
     const clipLeft = timeToPixel(clip.startTime);
-    const clipHeight = track.height - 4;
 
     const isSelected = clip.selected;
     const isDragging = dragState.isDragging && dragState.selectedClipIds.includes(clip.id);
-    
-    // Check if this clip has a range selection
-    const hasRangeSelection = rangeSelection?.clipId === clip.id;
 
     return (
       <div
         key={clip.id}
-        data-clip-id={clip.id}
-        className={`
-          absolute top-1 cursor-pointer rounded-md border border-[#333] overflow-hidden
-          ${isSelected ? 'ring-2 ring-blue-400' : ''}
-          ${isDragging ? 'opacity-75' : ''}
-        `}
+        className={`absolute top-1 ${isDragging ? 'opacity-75' : ''}`}
         style={{
           left: `${clipLeft}px`,
           width: `${clipWidth}px`,
-          height: `${clipHeight}px`,
-          backgroundColor: clip.color,
-        }}
-        onClick={(e) => onClipClick(clip.id, e)}
-        onMouseDown={(e) => {
-          if (e.button === 0) { // Left mouse button
-            onClipMouseDown(clip.id, e, "move");
-          }
+          height: `${track.height - 4}px`,
         }}
       >
-        {/* Clip content */}
-        <div className="relative w-full h-full">
-          {/* Waveform */}
-          {renderWaveform(clip, clipWidth, clipHeight)}
-          
-          {/* Clip name */}
-          <div className="absolute top-1 left-2 text-xs text-white font-medium truncate max-w-[calc(100%-16px)] pointer-events-none">
-            {clip.name}
-          </div>
-          
-          {/* Range selection overlay */}
-          {hasRangeSelection && (
-            <div
-              className="absolute top-0 bottom-0 bg-blue-500 bg-opacity-30 border-l-2 border-r-2 border-blue-500"
-              style={{
-                left: `${(rangeSelection.startOffset / clip.duration) * clipWidth}px`,
-                width: `${((rangeSelection.endOffset - rangeSelection.startOffset) / clip.duration) * clipWidth}px`,
-              }}
-            />
-          )}
-          
-          {/* Resize handles */}
-          {isSelected && !isDragging && (
-            <>
-              <div
-                className="absolute top-0 bottom-0 left-0 w-2 cursor-ew-resize bg-transparent hover:bg-blue-400 hover:bg-opacity-50"
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  onClipMouseDown(clip.id, e, "trim-start");
-                }}
-              />
-              <div
-                className="absolute top-0 bottom-0 right-0 w-2 cursor-ew-resize bg-transparent hover:bg-blue-400 hover:bg-opacity-50"
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  onClipMouseDown(clip.id, e, "trim-end");
-                }}
-              />
-            </>
-          )}
-        </div>
+        <TimelineClipComponent
+          id={clip.id}
+          fileName={clip.name}
+          duration={clip.duration}
+          startTime={clip.startTime}
+          width={clipWidth}
+          selected={isSelected}
+          waveformData={clip.waveformData}
+          waveformColor={clip.waveformColor}
+          onClipSelect={(clipId, event) => onClipClick(clipId, event)}
+                     onRangeSelect={(clipId: string, startOffset: number, endOffset: number) => onRangeSelect(clipId, startOffset, endOffset)}
+          onClipSplit={(clipId, splitPoint) => {
+            // Convert split point to range for consistency
+            const splitDuration = 0.1;
+            const startOffset = Math.max(0, splitPoint - splitDuration / 2);
+            const endOffset = Math.min(clip.duration, splitPoint + splitDuration / 2);
+            onRangeSelect(clipId, startOffset, endOffset);
+          }}
+          onClipDelete={(clipId) => {
+            // Select and delete entire clip
+            onClipClick(clipId, { stopPropagation: () => {} } as React.MouseEvent);
+          }}
+          onClipMouseDown={(e) => onClipMouseDown(clip.id, e, "move")}
+        />
       </div>
     );
   };

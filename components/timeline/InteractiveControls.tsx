@@ -11,7 +11,7 @@ import {
   Group, 
   Ungroup 
 } from 'lucide-react';
-import { TimelineState, RangeSelection } from '../types/timeline';
+import { RangeSelection } from '../types/timeline';
 
 interface InteractiveControlsProps {
   onSplit: () => void;
@@ -28,11 +28,13 @@ interface InteractiveControlsProps {
   selectedClips: string[];
   zoomLevel: number;
   hasGroupedSelection: boolean;
-  timelineState: TimelineState;
   rangeSelection: RangeSelection | null;
   onRangeSplit: (clipId: string, startOffset: number, endOffset: number) => void;
   onRangeDelete: (clipId: string, startOffset: number, endOffset: number) => void;
   onClearRangeSelection: () => void;
+  onCopy: () => void;
+  onPaste?: () => void;
+  hasClipboardData: boolean;
 }
 
 const InteractiveControls: React.FC<InteractiveControlsProps> = ({
@@ -54,6 +56,9 @@ const InteractiveControls: React.FC<InteractiveControlsProps> = ({
   onRangeSplit,
   onRangeDelete,
   onClearRangeSelection,
+  onCopy,
+  onPaste,
+  hasClipboardData,
 }) => {
   const formatTime = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);
@@ -123,6 +128,17 @@ const InteractiveControls: React.FC<InteractiveControlsProps> = ({
             >
               <Trash2 className="h-3 w-3 mr-1" />
               Delete Range
+            </Button>
+            
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onCopy}
+              className="h-8 px-3 text-white hover:bg-[#2a2a2a] text-xs"
+              title="Copy selection (Cmd+C)"
+              disabled={!onCopy}
+            >
+              📋 Copy
             </Button>
             
             <Button
