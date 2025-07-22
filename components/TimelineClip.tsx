@@ -133,42 +133,38 @@ export default function TimelineClip({
     }
   }, [stableWaveformData, id, width]);
 
-  // Handle clip dragging from header - only drag when selected
+  // Handle clip dragging from header - works for both selected and unselected clips
   const handleHeaderMouseDown = useCallback((e: React.MouseEvent) => {
-    // Only start drag if clip is already selected
-    if (selected) {
-      console.log('🖱️ Starting drag for selected clip:', id);
-      e.preventDefault();
-      e.stopPropagation();
-      
-      // Use the main timeline's drag system instead of our own
-      if (onClipMouseDown) {
-        onClipMouseDown(e);
-      } else {
-        // Fallback to old system if onClipMouseDown not provided
-        setIsDragging(true);
-        setDragStartX(e.clientX);
-        setInitialPosition(startTime);
-        
-        const handleMouseMove = (e: MouseEvent) => {
-          if (!isDragging) return;
-          const deltaX = e.clientX - dragStartX;
-          const newPosition = Math.max(0, initialPosition + deltaX / 10); // Scale factor for timeline
-          onClipDrag?.(id, newPosition);
-        };
-
-        const handleMouseUp = () => {
-          setIsDragging(false);
-          document.removeEventListener('mousemove', handleMouseMove);
-          document.removeEventListener('mouseup', handleMouseUp);
-        };
-
-        document.addEventListener('mousemove', handleMouseMove);
-        document.addEventListener('mouseup', handleMouseUp);
-      }
+    console.log(`🖱️ Clip header mouse down: ${id}, selected: ${selected}`);
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Always use the main timeline's drag system - it will handle selection automatically
+    if (onClipMouseDown) {
+      console.log(`🎯 Delegating to main drag system for clip: ${id}`);
+      onClipMouseDown(e);
     } else {
-      // If not selected, just select it (click handler will take care of this)
-      console.log('👆 Clip not selected, will select on click');
+      // Fallback to old system if onClipMouseDown not provided
+      console.log(`⚠️ Using fallback drag system for clip: ${id}`);
+      setIsDragging(true);
+      setDragStartX(e.clientX);
+      setInitialPosition(startTime);
+      
+      const handleMouseMove = (e: MouseEvent) => {
+        if (!isDragging) return;
+        const deltaX = e.clientX - dragStartX;
+        const newPosition = Math.max(0, initialPosition + deltaX / 10); // Scale factor for timeline
+        onClipDrag?.(id, newPosition);
+      };
+
+      const handleMouseUp = () => {
+        setIsDragging(false);
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
     }
   }, [selected, onClipMouseDown, isDragging, dragStartX, initialPosition, startTime, id, onClipDrag]);
 
@@ -336,6 +332,9 @@ export default function TimelineClip({
           onClipSelect?.(id, e);
         }}
         onMouseDown={handleHeaderMouseDown}
+        title={selected 
+          ? "Drag vertically to move between tracks • Drag horizontally to move in time" 
+          : "Click to select clip"}
       >
         <div className="flex items-center gap-2 px-2 py-1">
           {/* Audio Icon */}

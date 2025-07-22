@@ -1629,6 +1629,12 @@ function InteractiveControls({
 export default function InteractiveTrackEditor({
   onTimelineChange,
 }: InteractiveTrackEditorProps) {
+  // Debug info on component mount
+  useEffect(() => {
+    console.log(`🎬 Interactive Timeline Editor loaded - Debugging enabled`);
+    console.log(`🔧 If drag-and-drop gets stuck, press ESC to reset`);
+    console.log(`📝 Watch console for detailed drag operation logs`);
+  }, []);
   const [audioTracks, setAudioTracks] = useState<any[]>([]);
   
   // Function to load default audio files (Roni.wav and Ingrid.wav)
@@ -1937,7 +1943,7 @@ export default function InteractiveTrackEditor({
     [timelineState.zoomLevel, timelineState.totalDuration],
   );
 
-  // Get track at Y position - accounts for expanded groups at top
+  // Enhanced track detection for improved vertical drag-and-drop
   const getTrackAtY = useCallback(
     (y: number) => {
       if (!trackAreaRef.current) return null;
@@ -1945,9 +1951,11 @@ export default function InteractiveTrackEditor({
       const rect = trackAreaRef.current.getBoundingClientRect();
       const relativeY = y - rect.top;
       
+      console.log(`🎯 Enhanced track detection: y=${y}, trackAreaTop=${rect.top}, relativeY=${relativeY}`);
+      
       // Account for expanded groups at the top
       const expandedGroups = timelineState.groups.filter(g => !g.collapsed);
-      let expandedGroupsHeight = 0;
+      let expandedGroupsHeight = 8; // Initial padding
       
       expandedGroups.forEach(group => {
         const groupClips = timelineState.tracks
@@ -1965,30 +1973,41 @@ export default function InteractiveTrackEditor({
           const numTracksToShow = maxTrackIndex + 2;
           const totalHeight = headerHeight + ((numTracksToShow - 1) * (clipHeight + clipSpacing)) + clipHeight + 4; // +4 for margin
           expandedGroupsHeight += totalHeight;
+          console.log(`   📋 Group ${group.name}: height=${totalHeight}, clips=${groupClips.length}`);
         }
       });
       
       // If clicking in expanded group area, return null (can't drop on expanded groups)
       if (relativeY < expandedGroupsHeight) {
-        console.log(`📍 Click in expanded group area: relativeY=${relativeY}, expandedGroupsHeight=${expandedGroupsHeight}`);
+        console.log(`   📍 In expanded group area: relativeY=${relativeY}, expandedGroupsHeight=${expandedGroupsHeight}`);
         return null;
       }
       
       // Adjust for expanded groups above regular tracks
       const adjustedY = relativeY - expandedGroupsHeight;
-      const trackIndex = Math.floor(adjustedY / 66); // 65px height + 1px margin
+      
+      // Find tracks that actually have renderable content (not just expanded group clips)
+      const renderableTracks = timelineState.tracks.filter(track => {
+        const trackClips = track.clips.filter(clip => {
+          if (!clip.groupId) return true; // Include ungrouped clips
+          const group = timelineState.groups.find(g => g.id === clip.groupId);
+          return group && group.collapsed; // Only include clips from collapsed groups
+        });
+        return trackClips.length > 0;
+      });
+      
+      const trackHeight = 66; // 65px height + 1px margin
+      const visualTrackIndex = Math.floor(adjustedY / trackHeight);
 
-      console.log(`📍 getTrackAtY: y=${y}, relativeY=${relativeY}, adjustedY=${adjustedY}, trackIndex=${trackIndex}`);
+      console.log(`   📊 Adjusted Y: ${adjustedY}, visual track index: ${visualTrackIndex}, renderable tracks: ${renderableTracks.length}`);
 
-      if (
-        trackIndex >= 0 &&
-        trackIndex < timelineState.tracks.length
-      ) {
-        const targetTrack = timelineState.tracks[trackIndex];
-        console.log(`   ✅ Target track: index=${trackIndex}, id=${targetTrack.id}`);
+      if (visualTrackIndex >= 0 && visualTrackIndex < renderableTracks.length) {
+        const targetTrack = renderableTracks[visualTrackIndex];
+        console.log(`   ✅ Target track: visual index=${visualTrackIndex}, id=${targetTrack.id}, name=${targetTrack.name}`);
         return targetTrack;
       }
-      console.log(`   ❌ No valid track found`);
+      
+      console.log(`   ❌ No valid track found (visual index ${visualTrackIndex}, available: ${renderableTracks.length})`);
       return null;
     },
     [timelineState.tracks, timelineState.groups],
@@ -2716,9 +2735,23 @@ export default function InteractiveTrackEditor({
       event: React.MouseEvent,
       dragType: "move" | "trim-start" | "trim-end",
     ) => {
+      console.log(`🖱️ handleClipMouseDown called: clipId=${clipId}, dragType=${dragType}, isDragging=${dragState.isDragging}`);
+      
       // Don't start drag if already dragging
-      if (dragState.isDragging) return;
+      if (dragState.isDragging) {
+        console.log(`⚠️ Ignoring mouse down - already dragging`);
+        return;
+      }
 
+      // Verify clip exists
+      const allClips = timelineState.tracks.flatMap(t => t.clips);
+      const clip = allClips.find(c => c.id === clipId);
+      if (!clip) {
+        console.error(`❌ Clip not found in handleClipMouseDown: ${clipId}`);
+        return;
+      }
+
+      console.log(`✅ Setting mouse down state for clip: ${clipId}`);
       setMouseDownState({
         isMouseDown: true,
         startX: event.clientX,
@@ -2728,7 +2761,7 @@ export default function InteractiveTrackEditor({
         dragType,
       });
     },
-    [dragState.isDragging],
+    [dragState.isDragging, timelineState.tracks],
   );
 
   // Handle playhead drag
@@ -3536,6 +3569,8 @@ export default function InteractiveTrackEditor({
     const selectedClipIds = timelineState.selectedClips;
     if (selectedClipIds.length === 0) return;
 
+    console.log(`📂 Ungrouping ${selectedClipIds.length} selected clips`);
+
     const allClips = timelineState.tracks.flatMap(
       (track) => track.clips,
     );
@@ -3548,26 +3583,148 @@ export default function InteractiveTrackEditor({
       }
     });
 
-    setTimelineState((prev) => ({
-      ...prev,
-      groups: prev.groups.filter(
-        (group) => !groupIdsToRemove.has(group.id),
-      ),
-      tracks: prev.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) => {
-          if (
-            clip.groupId &&
-            groupIdsToRemove.has(clip.groupId)
-          ) {
-            const { groupId, groupTrackIndex, ...clipWithoutGroup } = clip;
-            return clipWithoutGroup;
+    if (groupIdsToRemove.size === 0) {
+      console.log('❌ No grouped clips found in selection');
+      return;
+    }
+
+    console.log(`🗂️ Removing ${groupIdsToRemove.size} groups:`, Array.from(groupIdsToRemove));
+
+    setTimelineState((prev) => {
+      // Get all clips that will be ungrouped
+      const clipsToUngroup = allClips.filter(clip => 
+        clip.groupId && groupIdsToRemove.has(clip.groupId)
+      );
+
+      console.log(`📋 Found ${clipsToUngroup.length} clips to ungroup`);
+
+      // Remove group metadata from clips
+      const clipsWithoutGroups = clipsToUngroup.map(clip => {
+        const { groupId, groupTrackIndex, ...clipWithoutGroup } = clip;
+        return clipWithoutGroup;
+      });
+
+      // Check for overlaps and redistribute clips
+      const redistributedClips: TimelineClip[] = [];
+      const newTracksNeeded: TimelineTrack[] = [];
+      const existingTracks = [...prev.tracks];
+
+      // Sort clips by their original track position and time to maintain relative ordering
+      const sortedClips = clipsWithoutGroups.sort((a, b) => {
+        const aTrackIndex = prev.tracks.findIndex(t => t.id === a.trackId);
+        const bTrackIndex = prev.tracks.findIndex(t => t.id === b.trackId);
+        if (aTrackIndex !== bTrackIndex) return aTrackIndex - bTrackIndex;
+        return a.startTime - b.startTime;
+      });
+
+      for (const clip of sortedClips) {
+        let targetTrackId = clip.trackId;
+        let foundValidTrack = false;
+
+        // Check if the clip can stay on its current track without overlapping
+        const currentTrack = existingTracks.find(t => t.id === clip.trackId);
+        if (currentTrack) {
+          const hasOverlap = [
+            ...currentTrack.clips.filter(c => !clipsToUngroup.some(uc => uc.id === c.id)), // Existing clips not being ungrouped
+            ...redistributedClips.filter(rc => rc.trackId === clip.trackId) // Already redistributed clips on this track
+          ].some(existingClip => 
+            !(clip.endTime <= existingClip.startTime || clip.startTime >= existingClip.endTime)
+          );
+
+          if (!hasOverlap) {
+            foundValidTrack = true;
+            console.log(`✅ Clip ${clip.id} can stay on track ${clip.trackId}`);
           }
-          return clip;
-        }),
-      })),
-    }));
-  }, [timelineState.selectedClips, timelineState.tracks]);
+        }
+
+        // If can't stay on current track, find an available track
+        if (!foundValidTrack) {
+          console.log(`🔍 Finding new track for clip ${clip.id} (${clip.startTime.toFixed(2)}s-${clip.endTime.toFixed(2)}s)`);
+          
+          // Try existing tracks first (preferring tracks below the current one)
+          const currentTrackIndex = existingTracks.findIndex(t => t.id === clip.trackId);
+          let searchOrder = [];
+          
+          // Search below first, then above
+          for (let i = currentTrackIndex + 1; i < existingTracks.length; i++) {
+            searchOrder.push(i);
+          }
+          for (let i = currentTrackIndex - 1; i >= 0; i--) {
+            searchOrder.push(i);
+          }
+          
+          for (const trackIndex of searchOrder) {
+            const testTrack = existingTracks[trackIndex];
+            const hasOverlap = [
+              ...testTrack.clips.filter(c => !clipsToUngroup.some(uc => uc.id === c.id)), // Existing clips not being ungrouped
+              ...redistributedClips.filter(rc => rc.trackId === testTrack.id) // Already redistributed clips on this track
+            ].some(existingClip => 
+              !(clip.endTime <= existingClip.startTime || clip.startTime >= existingClip.endTime)
+            );
+
+            if (!hasOverlap) {
+              targetTrackId = testTrack.id;
+              foundValidTrack = true;
+              console.log(`✅ Found available track ${testTrack.id} for clip ${clip.id}`);
+              break;
+            }
+          }
+
+          // If no existing track works, create a new one
+          if (!foundValidTrack) {
+            const newTrack = createNewTrack();
+            newTracksNeeded.push(newTrack);
+            existingTracks.push(newTrack);
+            targetTrackId = newTrack.id;
+            console.log(`➕ Created new track ${newTrack.id} for clip ${clip.id}`);
+          }
+        }
+
+        // Add the clip to the redistributed list with its target track
+        redistributedClips.push({
+          ...clip,
+          trackId: targetTrackId
+        });
+      }
+
+      // Update tracks with redistributed clips
+      const finalTracks = existingTracks.map(track => {
+        // Remove clips that were ungrouped from their original tracks
+        const filteredClips = track.clips.filter(clip => 
+          !(clip.groupId && groupIdsToRemove.has(clip.groupId))
+        );
+
+        // Add redistributed clips that belong to this track
+        const redistributedForThisTrack = redistributedClips.filter(clip => 
+          clip.trackId === track.id
+        );
+
+        return {
+          ...track,
+          clips: [...filteredClips, ...redistributedForThisTrack]
+        };
+      });
+
+      // Add any new tracks that were created
+      const tracksWithNewOnes = [
+        ...finalTracks.filter(track => !newTracksNeeded.some(nt => nt.id === track.id)),
+        ...newTracksNeeded.map(newTrack => ({
+          ...newTrack,
+          clips: redistributedClips.filter(clip => clip.trackId === newTrack.id)
+        }))
+      ];
+
+      console.log(`✅ Ungrouping complete: redistributed ${redistributedClips.length} clips, created ${newTracksNeeded.length} new tracks`);
+
+      return {
+        ...prev,
+        groups: prev.groups.filter(
+          (group) => !groupIdsToRemove.has(group.id),
+        ),
+        tracks: tracksWithNewOnes,
+      };
+    });
+  }, [timelineState.selectedClips, timelineState.tracks, createNewTrack]);
 
   // Handle group expand (from collapsed group component)
   const handleExpandGroup = useCallback((groupId: string) => {
@@ -4261,16 +4418,38 @@ export default function InteractiveTrackEditor({
           event.clientY - mouseDownState.startY,
         );
         const timeDelta = Date.now() - mouseDownState.startTime;
+        
+        // Safety check - if mouse has been down too long without movement, reset it
+        if (timeDelta > 2000 && deltaX < 2 && deltaY < 2) {
+          console.log(`🔄 Resetting stuck mouse down state after ${timeDelta}ms`);
+          setMouseDownState({
+            isMouseDown: false,
+            startX: 0,
+            startY: 0,
+            startTime: 0,
+            clipId: null,
+            dragType: null,
+          });
+          return;
+        }
 
         // Start drag if mouse moved more than 5px or held for more than 150ms
         if (deltaX > 5 || deltaY > 5 || timeDelta > 150) {
+          console.log(`🚀 Attempting to start drag: deltaX=${deltaX}, deltaY=${deltaY}, timeDelta=${timeDelta}ms, clipId=${mouseDownState.clipId}`);
+          
           const allClips = timelineState.tracks.flatMap(
             (t) => t.clips,
           );
           const clip = allClips.find(
             (c) => c.id === mouseDownState.clipId,
           );
-          if (!clip) return;
+          
+          if (!clip) {
+            console.error(`❌ Clip not found for drag: ${mouseDownState.clipId}. Available clips:`, allClips.map(c => c.id));
+            return;
+          }
+          
+          console.log(`🎯 Found clip for drag: ${clip.id}, selected: ${clip.selected}, track: ${clip.trackId}`);
 
           // If the clicked clip is not selected, select it (respecting individual vs group selection)
           let selectedClipIds = timelineState.selectedClips;
@@ -4339,6 +4518,22 @@ export default function InteractiveTrackEditor({
             }
           });
 
+          console.log(`✅ Starting drag for clip: ${clip.id}, selectedClips: ${selectedClipIds.length}, originalClips: ${originalClips.length}`);
+
+          // Validate we have the necessary data for dragging
+          if (originalClips.length === 0) {
+            console.error(`❌ No original clips found for drag operation. Selected: ${selectedClipIds}`);
+            setMouseDownState({
+              isMouseDown: false,
+              startX: 0,
+              startY: 0,
+              startTime: 0,
+              clipId: null,
+              dragType: null,
+            });
+            return;
+          }
+
           setDragState({
             isDragging: true,
             dragType: mouseDownState.dragType,
@@ -4367,6 +4562,10 @@ export default function InteractiveTrackEditor({
             clipId: null,
             dragType: null,
           });
+          
+          console.log(`🚀 Drag state successfully initialized`);
+        } else {
+          console.log(`⏳ Waiting for more movement or time: deltaX=${deltaX}, deltaY=${deltaY}, timeDelta=${timeDelta}ms`);
         }
         return;
       }
@@ -4376,8 +4575,12 @@ export default function InteractiveTrackEditor({
         return;
 
       const deltaX = event.clientX - dragState.startX;
-      // const deltaY = event.clientY - dragState.startY;
+      const deltaY = event.clientY - dragState.startY;
       const deltaTime = pixelToTime(deltaX);
+      
+      // Detect if this is primarily a vertical drag (preserve timing position)
+      const isVerticalDrag = Math.abs(deltaY) > Math.abs(deltaX) * 2; // Vertical movement is 2x horizontal
+      const isPrimaryVertical = isVerticalDrag && Math.abs(deltaX) < 10; // Less than 10px horizontal movement
 
       if (dragState.dragType === "playhead") {
         const newTime = dragState.startTime + deltaTime;
@@ -4400,12 +4603,18 @@ export default function InteractiveTrackEditor({
           dragState.dragType === "move"
             ? getTrackAtY(event.clientY)
             : null;
+        
         let primaryTargetTrackId = targetTrack
           ? targetTrack.id
           : primaryClip.trackId;
         let primaryTargetTrackIndex = getTrackIndex(
           primaryTargetTrackId,
         );
+        
+        // Debug target track detection
+        if (dragState.dragType === "move") {
+          console.log(`🎯 Track detection: Y=${event.clientY}, targetTrack=${targetTrack ? targetTrack.name : 'null'}, fallback=${primaryClip.trackId}`);
+        }
 
         // For grouped clips, enforce rail constraints - they must maintain their relative track positions
         const isGroupedDrag = dragState.originalClips.some(
@@ -4455,11 +4664,18 @@ export default function InteractiveTrackEditor({
 
         // Calculate new position based on drag type for primary clip
         if (dragState.dragType === "move") {
-          newStartTime = Math.max(
-            0,
-            primaryClip.startTime + deltaTime,
-          );
-          newEndTime = newStartTime + primaryClip.duration;
+          // For primarily vertical drags, preserve the original timing position
+          if (isPrimaryVertical) {
+            newStartTime = primaryClip.startTime; // Keep original timing
+            newEndTime = primaryClip.endTime;
+            console.log(`⬆️ Vertical-only drag detected - preserving timing position: ${newStartTime.toFixed(2)}s`);
+          } else {
+            newStartTime = Math.max(
+              0,
+              primaryClip.startTime + deltaTime,
+            );
+            newEndTime = newStartTime + primaryClip.duration;
+          }
         } else if (dragState.dragType === "trim-start") {
           newStartTime = Math.max(
             0,
@@ -4475,8 +4691,8 @@ export default function InteractiveTrackEditor({
           );
         }
 
-        // Check for snap points
-        const snapInfo = dragState.dragType ? findSnapPoints(
+        // Check for snap points (but skip for vertical-only drags to preserve timing)
+        const snapInfo = dragState.dragType && !isPrimaryVertical ? findSnapPoints(
           dragState.selectedClipIds,
           dragState.dragType,
           newStartTime,
@@ -4484,7 +4700,7 @@ export default function InteractiveTrackEditor({
         ) : null;
 
         let snapAdjustment = 0;
-        if (snapInfo) {
+        if (snapInfo && !isPrimaryVertical) {
           // Apply snap adjustment
           if (dragState.dragType === "move") {
             if (
@@ -4586,7 +4802,10 @@ export default function InteractiveTrackEditor({
             collisionDetected = checkMultiTrackCollisions(clipPositions);
             // With cascading push-down, collisions are OK - they'll be resolved automatically
             // Only invalid if we can't find target tracks for clips
-            // isValidDrop remains true even with collisions
+            // For vertical drags, we're more permissive with collisions since we have smart push-down
+            if (isVerticalDrag && collisionDetected) {
+              console.log(`⬇️ Vertical drag with collisions detected - will cascade push-down`);
+            }
           }
         }
 
@@ -4600,7 +4819,7 @@ export default function InteractiveTrackEditor({
           collisionDetected = false;
         }
 
-        // Update drag state
+        // Update drag state with enhanced feedback
         setDragState((prev) => ({
           ...prev,
           targetTrackId: primaryTargetTrackId,
@@ -4608,6 +4827,17 @@ export default function InteractiveTrackEditor({
           collisionDetected,
           showNewTrackIndicator,
         }));
+        
+        // Update cursor based on drag type for better user feedback
+        if (dragState.dragType === "move") {
+          if (isPrimaryVertical) {
+            document.body.style.cursor = 'ns-resize'; // Vertical resize cursor
+          } else if (isVerticalDrag) {
+            document.body.style.cursor = 'all-scroll'; // Mixed movement cursor
+          } else {
+            document.body.style.cursor = 'ew-resize'; // Horizontal resize cursor
+          }
+        }
 
         // Update timeline state for visual feedback - move all selected clips maintaining track relationships
         setTimelineState((prev) => {
@@ -4732,6 +4962,19 @@ export default function InteractiveTrackEditor({
           dragType: null,
         });
         return;
+      }
+      
+      // Safety: Always clear any stuck mouse down state on mouse up
+      if (mouseDownState.isMouseDown) {
+        console.log('🔄 Clearing stuck mouse down state on mouse up');
+        setMouseDownState({
+          isMouseDown: false,
+          startX: 0,
+          startY: 0,
+          startTime: 0,
+          clipId: null,
+          dragType: null,
+        });
       }
 
       if (
@@ -4959,6 +5202,9 @@ export default function InteractiveTrackEditor({
         }
       }
 
+      // Reset cursor to default
+      document.body.style.cursor = 'default';
+      
       // Reset drag and snap states
       setDragState({
         isDragging: false,
@@ -5099,6 +5345,42 @@ export default function InteractiveTrackEditor({
           })),
         }));
         clearRangeSelection();
+        
+        // Emergency reset: Clear any stuck drag states
+        if (dragState.isDragging || mouseDownState.isMouseDown) {
+          console.log('🚨 Emergency reset: Clearing stuck drag states');
+          document.body.style.cursor = 'default';
+          setDragState({
+            isDragging: false,
+            dragType: null,
+            clipId: null,
+            selectedClipIds: [],
+            startX: 0,
+            startY: 0,
+            startTime: 0,
+            originalClips: [],
+            targetTrackId: null,
+            trackOffsets: new Map(),
+            isValidDrop: false,
+            collisionDetected: false,
+            dragStarted: false,
+            showNewTrackIndicator: false,
+          });
+          setMouseDownState({
+            isMouseDown: false,
+            startX: 0,
+            startY: 0,
+            startTime: 0,
+            clipId: null,
+            dragType: null,
+          });
+          setSnapState({
+            isSnapping: false,
+            snapPosition: null,
+            snapType: null,
+            targetClipId: null,
+          });
+        }
             // Copy/paste handled by dedicated handler below
       } else if (event.key === ' ') {
         event.preventDefault();
@@ -5127,6 +5409,8 @@ export default function InteractiveTrackEditor({
       handleZoomOut,
       hasGroupedSelection,
       handleUngroup,
+      dragState.isDragging,
+      mouseDownState.isMouseDown,
       handleGroup
     ]);
 

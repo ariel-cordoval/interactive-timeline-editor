@@ -196,10 +196,35 @@ const TrackRow: React.FC<TrackRowProps> = ({
   return (
     <div
       className={`
-        relative h-[66px] border-b border-[#2b2b2b] bg-[#161616]
-        ${isDropTarget ? (isValidDropTarget ? 'bg-green-900' : 'bg-red-900') : ''}
+        relative h-[66px] border-b border-[#2b2b2b] bg-[#161616] transition-all duration-150
+        ${isDropTarget ? (isValidDropTarget 
+          ? 'bg-green-900/40 border-green-500 border-2 shadow-lg' 
+          : 'bg-red-900/40 border-red-500 border-2') : ''}
       `}
     >
+      {/* Drop indicator overlay */}
+      {isDropTarget && isValidDropTarget && (
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="h-full w-full border-2 border-dashed border-green-400 rounded-md bg-green-500/10 flex items-center justify-center">
+            <div className="text-green-400 text-sm font-medium px-2 py-1 bg-black/50 rounded flex items-center gap-2">
+              <span>↓</span>
+              <span>{dragState.collisionDetected ? 'Will push clips down' : 'Drop here'}</span>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Invalid drop indicator */}
+      {isDropTarget && !isValidDropTarget && (
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="h-full w-full border-2 border-dashed border-red-400 rounded-md bg-red-500/10 flex items-center justify-center">
+            <div className="text-red-400 text-sm font-medium px-2 py-1 bg-black/50 rounded">
+              Conflicts detected
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Render visible clips */}
       {visibleClips.map(renderClip)}
       

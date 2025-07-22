@@ -392,7 +392,7 @@ export default function GroupClip({
           `}
           onMouseDown={handleContentMouseDown}
           onClick={handleGroupClick}
-          title={`Real combined waveform • Colors show active speakers${clips.length > 1 ? ` (${clips.length} tracks)` : ''} • Shift+drag to select range`}
+          title={`Real combined waveform • Colors show active speakers${clips.length > 1 ? ` (${clips.length} tracks)` : ''} • Drag vertically to move between tracks • Drag horizontally to move in time • Shift+drag to select range`}
         >
           {/* Waveform */}
           <div className="flex items-center h-full px-1 py-1">
