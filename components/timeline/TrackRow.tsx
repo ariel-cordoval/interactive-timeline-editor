@@ -21,6 +21,8 @@ interface TrackRowProps {
   onRangeDelete: (clipId: string, startOffset: number, endOffset: number) => void;
   onGroupClick: (groupId: string, event: React.MouseEvent) => void;
   onGroupMouseDown: (groupId: string, event: React.MouseEvent, dragType: "move" | "trim-start" | "trim-end") => void;
+  onExpandGroup: (groupId: string) => void;
+  onCollapseGroup: (groupId: string) => void;
 }
 
 const TrackRow: React.FC<TrackRowProps> = ({
@@ -41,6 +43,8 @@ const TrackRow: React.FC<TrackRowProps> = ({
   onRangeDelete,
   onGroupClick,
   onGroupMouseDown,
+  onExpandGroup,
+  onCollapseGroup,
 }) => {
   // Get groups for this track
   const trackGroups = groups.filter(group => group.trackId === track.id);
@@ -109,6 +113,8 @@ const TrackRow: React.FC<TrackRowProps> = ({
             onRangeSelect={onRangeSelect}
             onRangeSplit={onRangeSplit}
             onRangeDelete={onRangeDelete}
+            onExpandGroup={onExpandGroup}
+            onCollapseGroup={onCollapseGroup}
           />
         );
       })}
