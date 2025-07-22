@@ -6,15 +6,12 @@ import {
   DragState, 
   RangeSelection 
 } from '../types/timeline';
-import { ChevronUp } from 'lucide-react';
 
 interface GroupTrackRowProps {
   group: TimelineGroup;
   clips: TimelineClip[];
   onGroupClick: (groupId: string, event: React.MouseEvent) => void;
   onGroupMouseDown: (groupId: string, event: React.MouseEvent, dragType: "move" | "trim-start" | "trim-end") => void;
-  onExpandGroup: (groupId: string) => void;
-  onCollapseGroup: (groupId: string) => void;
   onClipClick: (clipId: string, event: React.MouseEvent) => void;
   onClipMouseDown: (clipId: string, event: React.MouseEvent, dragType: "move" | "trim-start" | "trim-end") => void;
   timeToPixel: (time: number) => number;
@@ -33,7 +30,6 @@ const GroupTrackRow: React.FC<GroupTrackRowProps> = ({
   clips,
   onGroupClick,
   onGroupMouseDown,
-  onCollapseGroup,
   onClipClick,
   onClipMouseDown,
   timeToPixel,
@@ -41,219 +37,214 @@ const GroupTrackRow: React.FC<GroupTrackRowProps> = ({
   selected,
   rangeSelection,
 }) => {
-  // Sort clips by their original track index for proper display
-  const sortedClips = [...clips].sort((a, b) => {
-    const aIndex = a.groupTrackIndex || 0;
-    const bIndex = b.groupTrackIndex || 0;
-    return aIndex - bIndex;
-  });
-
-  const renderWaveform = (clip: TimelineClip, clipWidth: number, clipHeight: number) => {
-    if (!clip.waveformData || !(clip.waveformData instanceof Float32Array)) {
-      return null;
-    }
-
-    const waveformData = clip.waveformData;
-    const samplesPerPixel = waveformData.length / clipWidth;
-    const centerY = clipHeight / 2;
-    const maxAmplitude = Math.max(...Array.from(waveformData));
-
-    // Generate path for waveform
-    let pathData = '';
-    for (let x = 0; x < clipWidth; x++) {
-      const sampleIndex = Math.floor(x * samplesPerPixel);
-      const amplitude = waveformData[sampleIndex] || 0;
-      const normalizedAmplitude = amplitude / maxAmplitude;
-      const y = centerY - (normalizedAmplitude * centerY * 0.8);
-      
-      if (x === 0) {
-        pathData += `M ${x} ${centerY}`;
-      }
-      pathData += ` L ${x} ${y}`;
-    }
-    
-    // Complete the waveform shape
-    pathData += ` L ${clipWidth} ${centerY}`;
-    for (let x = clipWidth - 1; x >= 0; x--) {
-      const sampleIndex = Math.floor(x * samplesPerPixel);
-      const amplitude = waveformData[sampleIndex] || 0;
-      const normalizedAmplitude = amplitude / maxAmplitude;
-      const y = centerY + (normalizedAmplitude * centerY * 0.8);
-      pathData += ` L ${x} ${y}`;
-    }
-    pathData += ' Z';
-
-    return (
-      <svg
-        width={clipWidth}
-        height={clipHeight}
-        className="absolute inset-0 pointer-events-none"
-      >
-        <path
-          d={pathData}
-          fill={clip.waveformColor || clip.color}
-          opacity={0.6}
-        />
-      </svg>
-    );
-  };
-
-  const renderClip = (clip: TimelineClip, trackIndex: number) => {
-    const clipWidth = timeToPixel(clip.duration);
-    const clipLeft = timeToPixel(clip.startTime);
-    const clipHeight = 60; // Standard clip height
-    const trackY = 30 + (trackIndex * 66); // Header height + track spacing
-
-    const isSelected = clip.selected;
-    const isDragging = dragState.isDragging && dragState.selectedClipIds.includes(clip.id);
-    
-    // Check if this clip has a range selection
-    const hasRangeSelection = rangeSelection?.clipId === clip.id;
-
-    return (
-      <div
-        key={clip.id}
-        data-clip-id={clip.id}
-        className={`
-          absolute cursor-pointer rounded-md border border-[#333] overflow-hidden
-          ${isSelected ? 'ring-2 ring-blue-400' : ''}
-          ${isDragging ? 'opacity-75' : ''}
-        `}
-        style={{
-          left: `${clipLeft}px`,
-          top: `${trackY}px`,
-          width: `${clipWidth}px`,
-          height: `${clipHeight}px`,
-          backgroundColor: clip.color,
-        }}
-        onClick={(e) => onClipClick(clip.id, e)}
-        onMouseDown={(e) => {
-          if (e.button === 0) { // Left mouse button
-            onClipMouseDown(clip.id, e, "move");
-          }
-        }}
-      >
-        {/* Clip content */}
-        <div className="relative w-full h-full">
-          {/* Waveform */}
-          {renderWaveform(clip, clipWidth, clipHeight)}
-          
-          {/* Clip name */}
-          <div className="absolute top-1 left-2 text-xs text-white font-medium truncate max-w-[calc(100%-16px)] pointer-events-none">
-            {clip.name}
-          </div>
-          
-          {/* Range selection overlay */}
-          {hasRangeSelection && (
-            <div
-              className="absolute top-0 bottom-0 bg-blue-500 bg-opacity-30 border-l-2 border-r-2 border-blue-500"
-              style={{
-                left: `${(rangeSelection.startOffset / clip.duration) * clipWidth}px`,
-                width: `${((rangeSelection.endOffset - rangeSelection.startOffset) / clip.duration) * clipWidth}px`,
-              }}
-            />
-          )}
-          
-          {/* Resize handles */}
-          {isSelected && !isDragging && (
-            <>
-              <div
-                className="absolute top-0 bottom-0 left-0 w-2 cursor-ew-resize bg-transparent hover:bg-blue-400 hover:bg-opacity-50"
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  onClipMouseDown(clip.id, e, "trim-start");
-                }}
-              />
-              <div
-                className="absolute top-0 bottom-0 right-0 w-2 cursor-ew-resize bg-transparent hover:bg-blue-400 hover:bg-opacity-50"
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  onClipMouseDown(clip.id, e, "trim-end");
-                }}
-              />
-            </>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  // Calculate group dimensions
-  const startTime = Math.min(...clips.map(clip => clip.startTime));
-  const endTime = Math.max(...clips.map(clip => clip.endTime));
-  const groupWidth = timeToPixel(endTime - startTime);
-  const groupLeft = timeToPixel(startTime);
+  // Calculate group bounds
+  const groupStartTime = Math.min(...clips.map(c => c.startTime));
+  const groupEndTime = Math.max(...clips.map(c => c.endTime));
+  const groupDuration = groupEndTime - groupStartTime;
+  const groupWidth = timeToPixel(groupDuration);
   
-  // Calculate number of tracks needed
-  const maxTrackIndex = Math.max(...clips.map(clip => clip.groupTrackIndex || 0));
-  const trackCount = maxTrackIndex + 1;
-  const totalHeight = 30 + (trackCount * 66); // Header + tracks
+  const isBeingDragged = clips.some(clip => 
+    dragState.selectedClipIds.includes(clip.id));
 
-  return (
-    <div
-      className={`
-        absolute bg-[#1a1a1a] border border-[#333] rounded-md overflow-hidden
-        ${selected ? 'ring-2 ring-blue-400' : ''}
-      `}
-      style={{
-        left: `${groupLeft}px`,
-        top: '66px', // Position below main track
-        width: `${groupWidth + 20}px`, // Extra padding
-        height: `${totalHeight}px`,
-        zIndex: 10,
-      }}
-      data-group-id={group.id}
-    >
-      {/* Group header */}
-      <div 
-        className="h-[30px] bg-[#2a2a2a] border-b border-[#333] flex items-center justify-between px-3 cursor-pointer"
-        onClick={(e) => onGroupClick(group.id, e)}
-        onMouseDown={(e) => {
-          if (e.button === 0) {
-            onGroupMouseDown(group.id, e, "move");
+  // Generate consistent colors for speakers
+  const getSpeakerColor = (clipName: string, clipColor?: string) => {
+    if (clipColor) return clipColor;
+    
+    const colors = [
+      '#E961FF', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', 
+      '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE'
+    ];
+    
+    let hash = 0;
+    for (let i = 0; i < clipName.length; i++) {
+      hash = clipName.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash) % colors.length];
+  };
+
+  // Generate real combined waveform with speaker color coding
+  const generateCombinedWaveform = () => {
+    if (!clips.length) return [];
+    
+    const bars = [];
+    const barCount = Math.max(20, Math.floor(groupWidth / 3));
+    const segmentDuration = groupDuration / barCount;
+    
+    for (let i = 0; i < barCount; i++) {
+      const segmentTime = i * segmentDuration + groupStartTime;
+      
+      const activeClips = clips.filter(clip => {
+        return segmentTime >= clip.startTime && segmentTime < clip.endTime;
+      });
+      
+      const clipAmplitudes: Array<{
+        clip: any;
+        amplitude: number;
+        color: string;
+      }> = [];
+      
+      activeClips.forEach(clip => {
+        if (clip.waveformData && clip.waveformData.length > 0) {
+          const clipProgress = (segmentTime - clip.startTime) / clip.duration;
+          const waveformIndex = Math.floor(clipProgress * clip.waveformData.length);
+          if (waveformIndex >= 0 && waveformIndex < clip.waveformData.length) {
+            const amplitude = clip.waveformData[waveformIndex];
+            clipAmplitudes.push({
+              clip,
+              amplitude,
+              color: getSpeakerColor(clip.name, clip.waveformColor)
+            });
           }
-        }}
-      >
-        <div className="flex items-center gap-2">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onCollapseGroup(group.id);
-            }}
-            className="text-[#888] hover:text-white"
-          >
-            <ChevronUp className="h-3 w-3" />
-          </button>
-          <span className="text-xs text-white font-medium">
-            {group.name} ({clips.length} clips)
-          </span>
-        </div>
+        }
+      });
+      
+      if (clipAmplitudes.length > 0) {
+        const dominantSpeaker = clipAmplitudes.reduce((prev, current) => 
+          current.amplitude > prev.amplitude ? current : prev
+        );
         
-        <div className="text-xs text-[#666]">
-          Group
-        </div>
-      </div>
+        const totalAmplitude = clipAmplitudes.reduce((sum, item) => sum + item.amplitude, 0);
+        const normalizedAmplitude = Math.min(1, totalAmplitude);
+        const dominanceRatio = dominantSpeaker.amplitude / totalAmplitude;
+        const barHeight = Math.max(2, normalizedAmplitude * 24);
+        const opacity = 0.4 + (dominanceRatio * 0.6);
+        
+        bars.push({
+          x: (i / barCount) * groupWidth,
+          height: barHeight,
+          opacity,
+          color: dominantSpeaker.color,
+          dominantSpeaker: dominantSpeaker.clip.name || 'Unknown'
+        });
+      } else {
+        bars.push({
+          x: (i / barCount) * groupWidth,
+          height: 2,
+          opacity: 0.2,
+          color: '#666666',
+          dominantSpeaker: ''
+        });
+      }
+    }
+    
+    return bars;
+  };
 
-      {/* Group tracks */}
-      <div className="relative">
-        {/* Track separators */}
-        {Array.from({ length: trackCount }, (_, i) => (
+  const waveformBars = generateCombinedWaveform();
+
+  // Render group as unified clip
+  return (
+    <div className="mb-1 h-[65px] relative select-none">
+      <div
+        className={`absolute top-0 h-full transition-all duration-200 select-none ${
+          isBeingDragged ? "opacity-80" : ""
+        }`}
+        style={{
+          left: `${timeToPixel(groupStartTime)}px`,
+          width: `${groupWidth}px`,
+          zIndex: selected ? 15 : 10,
+        }}
+        data-group-id={group.id}
+      >
+        {/* Unified Group - Styled like TimelineClip */}
+        <div
+          className={`
+            relative rounded-lg overflow-hidden transition-all duration-200 cursor-pointer
+            ${selected ? 'ring-2 ring-[#E961FF] ring-opacity-50' : ''}
+            ${isBeingDragged ? 'opacity-80 scale-[0.98]' : ''}
+          `}
+          style={{ width: `${groupWidth}px` }}
+          data-group-id={group.id}
+        >
+          {/* Header Area - Click to select, drag when selected */}
           <div
-            key={i}
-            className="absolute border-b border-[#2b2b2b]"
-            style={{
-              top: `${30 + (i * 66)}px`,
-              left: 0,
-              right: 0,
-              height: '66px',
+            className={`
+              h-6 relative transition-all duration-200 cursor-pointer
+              ${selected ? 'bg-[#2b2b2b]' : 'bg-[#1d1d1d]'}
+              hover:bg-[#2b2b2b]
+            `}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onGroupClick(group.id, e);
             }}
-          />
-        ))}
+            onMouseDown={(e) => {
+              if (selected) {
+                e.preventDefault();
+                e.stopPropagation();
+                onGroupMouseDown(group.id, e, "move");
+              }
+            }}
+          >
+            <div className="flex items-center gap-2 px-2 py-1">
+              {/* Group Name */}
+              <div className="flex-1 min-w-0">
+                <p className="text-[#bbbbbb] text-[11px] font-semibold leading-[16px] truncate">
+                  {group.name || 'Tracks group'}
+                </p>
+              </div>
+              
+              {/* Duration */}
+              <div className="text-[#888888] text-[10px] shrink-0">
+                {Math.floor(groupDuration)}s
+              </div>
+            </div>
+          </div>
 
-        {/* Render clips */}
-        {sortedClips.map(clip => 
-          renderClip(clip, clip.groupTrackIndex || 0)
-        )}
+          {/* Content Area - Combined Waveform */}
+          <div className="h-10 relative bg-[#1d1d1d] hover:bg-[#222222] transition-colors duration-150 mx-1">
+            <div className="flex items-center h-full px-1 py-1">
+              <div className="h-full relative w-full">
+                <svg
+                  className="w-full h-full"
+                  viewBox={`0 0 ${groupWidth} 32`}
+                  preserveAspectRatio="none"
+                >
+                  {waveformBars.map((bar: any, index: number) => {
+                    const barY = (32 - bar.height) / 2;
+                    return (
+                      <rect
+                        key={index}
+                        x={bar.x}
+                        y={barY}
+                        width="2"
+                        height={bar.height}
+                        fill={bar.color || "#E961FF"}
+                        opacity={bar.opacity}
+                        data-speaker={bar.dominantSpeaker || ''}
+                      />
+                    );
+                  })}
+                </svg>
+              </div>
+            </div>
+
+            {/* Active Speaker Indicator */}
+            {(() => {
+              const recentBars = waveformBars.slice(-5);
+              const activeSpeakers = recentBars
+                .filter((bar: any) => bar.dominantSpeaker && bar.opacity > 0.5)
+                .map((bar: any) => ({ name: bar.dominantSpeaker, color: bar.color }));
+              
+              if (activeSpeakers.length > 0) {
+                const currentSpeaker = activeSpeakers[activeSpeakers.length - 1];
+                return (
+                  <div 
+                    className="absolute top-1 right-2 px-2 py-0.5 rounded text-xs font-medium shadow-lg border"
+                    style={{ 
+                      backgroundColor: currentSpeaker.color + '20',
+                      borderColor: currentSpeaker.color,
+                      color: currentSpeaker.color
+                    }}
+                  >
+                    🎤 {currentSpeaker.name}
+                  </div>
+                );
+              }
+              return null;
+            })()}
+          </div>
+        </div>
       </div>
     </div>
   );
