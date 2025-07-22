@@ -56,9 +56,9 @@ const InteractiveControls: React.FC<InteractiveControlsProps> = ({
   onRangeSplit,
   onRangeDelete,
   onClearRangeSelection,
-  onCopy,
-  onPaste,
-  hasClipboardData,
+  onCopy: _onCopy, // Renamed to indicate intentionally unused
+  onPaste: _onPaste, // Renamed to indicate intentionally unused
+  hasClipboardData: _hasClipboardData, // Renamed to indicate intentionally unused
 }) => {
   const formatTime = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);
@@ -133,10 +133,10 @@ const InteractiveControls: React.FC<InteractiveControlsProps> = ({
             <Button
               variant="ghost"
               size="sm"
-              onClick={onCopy}
+              onClick={_onCopy}
               className="h-8 px-3 text-white hover:bg-[#2a2a2a] text-xs"
               title="Copy selection (Cmd+C)"
-              disabled={!onCopy}
+              disabled={!_onCopy}
             >
               📋 Copy
             </Button>

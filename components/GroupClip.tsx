@@ -18,6 +18,7 @@ interface TimelineGroup {
   id: string;
   name: string;
   clipIds: string[];
+  collapsed: boolean;
   trackId: string; // Groups now have a trackId like clips
 }
 
@@ -33,6 +34,8 @@ interface GroupClipProps {
   onGroupSplit?: (groupId: string, splitPoint: number) => void;
   onGroupDelete?: (groupId: string) => void;
   onGroupMouseDown?: (event: React.MouseEvent) => void;
+  onExpandGroup?: (groupId: string) => void;
+  onCollapseGroup?: (groupId: string) => void;
 }
 
 export default function GroupClip({
@@ -47,6 +50,8 @@ export default function GroupClip({
   onGroupSplit,
   onGroupDelete,
   onGroupMouseDown,
+  onExpandGroup,
+  onCollapseGroup,
 }: GroupClipProps) {
   // Range selection state (like TimelineClip)
   const [isSelecting, setIsSelecting] = useState(false);
@@ -162,88 +167,127 @@ export default function GroupClip({
 
   const waveformBars = generateCombinedWaveform();
 
-  // Handle interactions and events (similar to TimelineClip)
-  const clearSelection = useCallback(() => {
-    setIsSelecting(false);
-    setSelectionStart(null);
-    setSelectionEnd(null);
-  }, []);
-
+  // Handle content area interaction (range selection)
   const handleContentMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only left mouse button
-
+    if (!contentRef.current) return;
+    
     e.preventDefault();
     e.stopPropagation();
+    
+    const rect = contentRef.current.getBoundingClientRect();
+    const startX = e.clientX - rect.left;
+    const startOffset = (startX / rect.width) * duration;
+    const mouseDownTime = Date.now();
+    const mouseDownX = e.clientX;
+    const mouseDownY = e.clientY;
+    
+    setIsSelecting(true);
+    setSelectionStart(startOffset);
+    setSelectionEnd(startOffset);
+    
+    let hasMoved = false;
+    let currentSelectionStart = startOffset;  // Track locally to avoid React state timing issues
+    let currentSelectionEnd = startOffset;
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      e.stopPropagation();
+      if (!contentRef.current) return;
+      
+      // Check if this is actually a drag (moved more than 3 pixels)
+      const deltaX = Math.abs(e.clientX - mouseDownX);
+      const deltaY = Math.abs(e.clientY - mouseDownY);
+      
+      if (deltaX > 3 || deltaY > 3) {
+        hasMoved = true;
+        
+        // Continue with range selection
+        const rect = contentRef.current.getBoundingClientRect();
+        const currentX = e.clientX - rect.left;
+        const currentOffset = Math.max(0, Math.min(duration, (currentX / rect.width) * duration));
+        currentSelectionEnd = currentOffset;  // Update local variable
+        setSelectionEnd(currentOffset);  // Also update React state for visual feedback
+      }
+    };
 
-    const rect = contentRef.current?.getBoundingClientRect();
-    if (!rect) return;
+    const handleMouseUp = (e: MouseEvent) => {
+      e.stopPropagation();
+      setIsSelecting(false);
+      const timeDelta = Date.now() - mouseDownTime;
+      
+      // If this was a simple click (no movement and quick), just clear any partial selection
+      if (!hasMoved && timeDelta < 300) {
+        // Clear any existing selection but don't trigger group selection
+        // Let the background click handler deal with selection/deselection
+        setSelectionStart(null);
+        setSelectionEnd(null);
+      } else if (hasMoved) {
+        // Use local variables instead of React state to avoid timing issues
+        const start = Math.min(currentSelectionStart, currentSelectionEnd);
+        const end = Math.max(currentSelectionStart, currentSelectionEnd);
+        
+        // Only trigger range select if there's a meaningful selection (> 0.1 seconds)
+        if (Math.abs(end - start) > 0.1) {
+          onRangeSelect?.(group.id, start, end);
+        } else {
+          // Clear selection if it's too small
+          setSelectionStart(null);
+          setSelectionEnd(null);
+        }
+      }
+      
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
 
-    const clickX = e.clientX - rect.left;
-    const timeOffset = (clickX / width) * duration;
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [duration, group.id, onRangeSelect]);
 
-    if (e.shiftKey) {
-      // Range selection mode
-      setIsSelecting(true);
-      setSelectionStart(timeOffset);
-      setSelectionEnd(timeOffset);
-      onRangeSelect?.(group.id, timeOffset, timeOffset);
-    } else {
-      // Clear any existing selection
-      clearSelection();
-      // Regular group selection
-      onGroupSelect?.(group.id, e);
+  // Handle header click
+  const handleHeaderClick = useCallback((e: React.MouseEvent) => {
+    // Don't handle if clicking expand/collapse button
+    if ((e.target as HTMLElement).closest('button')) {
+      return;
     }
-  }, [group.id, width, duration, onRangeSelect, onGroupSelect, clearSelection]);
+    
+    e.stopPropagation();
+    onGroupSelect?.(group.id, e);
+  }, [group.id, onGroupSelect]);
 
+  // Handle group selection (similar to TimelineClip)
+  const handleGroupClick = useCallback((e: React.MouseEvent) => {
+    // Only handle clicks that aren't from the content area to avoid conflicts
+    if (contentRef.current && contentRef.current.contains(e.target as Node)) {
+      return;
+    }
+    
+    onGroupSelect?.(group.id, e);
+  }, [group.id, onGroupSelect]);
+
+  // Handle header drag
   const handleHeaderMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button')) {
+      return;
+    }
     
     e.preventDefault();
     e.stopPropagation();
     onGroupMouseDown?.(e);
   }, [onGroupMouseDown]);
 
-  const handleHeaderClick = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onGroupSelect?.(group.id, e);
-  }, [group.id, onGroupSelect]);
-
-  const handleGroupClick = useCallback((e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      onGroupSelect?.(group.id, e);
-    }
-  }, [group.id, onGroupSelect]);
-
-  // Handle mouse movement for range selection
+  // Clear selection when deselected
   useEffect(() => {
-    if (!isSelecting) return;
+    if (!selected) {
+      setSelectionStart(null);
+      setSelectionEnd(null);
+    }
+  }, [selected]);
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const rect = contentRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      const moveX = e.clientX - rect.left;
-      const timeOffset = Math.max(0, Math.min(duration, (moveX / width) * duration));
-      
-      if (selectionStart !== null) {
-        setSelectionEnd(timeOffset);
-        onRangeSelect?.(group.id, selectionStart, timeOffset);
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsSelecting(false);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isSelecting, selectionStart, group.id, width, duration, onRangeSelect]);
+  // Clear selection
+  const clearSelection = useCallback(() => {
+    setSelectionStart(null);
+    setSelectionEnd(null);
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -278,48 +322,61 @@ export default function GroupClip({
     }
   }, [selected, group.id, selectionStart, selectionEnd, onGroupDelete, onGroupSplit, clearSelection]);
 
-  // Unified group appearance (always behaves like a single clip)
-  return (
-    <div
-      className={`
-        relative rounded-lg overflow-hidden transition-all duration-200 h-16
-        ${selected ? 'ring-2 ring-[#E961FF] ring-opacity-50' : ''}
-      `}
-      style={{ width: `${width}px` }}
-      data-group-id={group.id}
-    >
-      {/* Header Area - Draggable */}
+  if (group.collapsed) {
+    // Collapsed state - behaves like a single clip
+    return (
       <div
         className={`
-          relative bg-[#2b2b2b] cursor-grab active:cursor-grabbing
-          hover:bg-[#333333] transition-colors duration-150 h-6
+          relative rounded-lg overflow-hidden transition-all duration-200 h-16
+          ${selected ? 'ring-2 ring-[#E961FF] ring-opacity-50' : ''}
         `}
-        onMouseDown={handleHeaderMouseDown}
-        onClick={handleHeaderClick}
+        style={{ width: `${width}px` }}
+        data-group-id={group.id}
       >
-        <div className="flex items-center gap-2 px-2 py-1">
-          {/* Group Icon (no expand/collapse) */}
-          <div className="w-4 h-4 rounded-sm bg-[#E961FF] bg-opacity-20 shrink-0 flex items-center justify-center">
-            <svg className="w-2.5 h-2.5 text-[#E961FF]" viewBox="0 0 16 16" fill="none">
-              <path
-                d="M3 4h10M3 8h10M3 12h10"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </div>
-          
-          {/* Group Name */}
-          <div className="flex-1 min-w-0">
-            <p className="text-[#bbbbbb] text-[11px] font-semibold leading-[16px] truncate">
-              {group.name || 'Tracks group'}
-            </p>
-          </div>
-          
-          {/* Duration */}
-          <div className="text-[#888888] text-[10px] shrink-0">
-            {Math.floor(duration)}s
+        {/* Header Area - Draggable */}
+        <div
+          className={`
+            relative bg-[#2b2b2b] cursor-grab active:cursor-grabbing
+            hover:bg-[#333333] transition-colors duration-150 h-6
+          `}
+          onMouseDown={handleHeaderMouseDown}
+          onClick={handleHeaderClick}
+        >
+          <div className="flex items-center gap-2 px-2 py-1">
+            {/* Expand Arrow */}
+            <div className="w-4 h-4 rounded-sm bg-[#E961FF] bg-opacity-20 shrink-0 flex items-center justify-center">
+              <button
+                className="w-3 h-3 flex items-center justify-center rotate-[270deg] hover:scale-110 transition-transform"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onExpandGroup?.(group.id);
+                }}
+                title="Expand group"
+              >
+                <svg className="w-2.5 h-2.5 text-[#E961FF]" viewBox="0 0 16 16" fill="none">
+                  <path
+                    d="M4 6l4 4 4-4"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+            
+            {/* Group Name */}
+            <div className="flex-1 min-w-0">
+              <p className="text-[#bbbbbb] text-[11px] font-semibold leading-[16px] truncate">
+                {group.name || 'Tracks group'}
+              </p>
+            </div>
+            
+            {/* Duration */}
+            <div className="text-[#888888] text-[10px] shrink-0">
+              {Math.floor(duration)}s
+            </div>
           </div>
         </div>
 
@@ -424,101 +481,124 @@ export default function GroupClip({
           </>
         )}
       </div>
-
-      {/* Content Area - Waveform & Selection */}
+    );
+  } else {
+    // Expanded state - clips stacked vertically in same track
+    const clipHeight = 45;
+    const headerHeight = 25;
+    const totalHeight = headerHeight + (clips.length * clipHeight) + (clips.length - 1) * 2; // 2px spacing between clips
+    
+    return (
       <div
-        ref={contentRef}
         className={`
-          relative h-10 cursor-crosshair overflow-hidden transition-colors duration-150
-          bg-[#1d1d1d] hover:bg-[#222222]
-          ${isSelecting ? 'cursor-grabbing bg-[#252525]' : ''}
-          ${selected ? 'ring-1 ring-[#E961FF] ring-opacity-30' : ''}
-          z-30 pointer-events-auto mx-1
+          relative rounded-lg overflow-hidden transition-all duration-200
+          ${selected ? 'ring-2 ring-[#E961FF] ring-opacity-50' : ''}
         `}
-        onMouseDown={handleContentMouseDown}
-        onClick={handleGroupClick}
-        title={`Real combined waveform • Colors show active speakers${clips.length > 1 ? ` (${clips.length} tracks)` : ''} • Drag vertically to move between tracks • Drag horizontally to move in time • Shift+drag to select range`}
+        style={{ width: `${width}px`, height: `${totalHeight}px` }}
+        data-group-id={group.id}
       >
-        {/* Waveform */}
-        <div className="flex items-center h-full px-1 py-1">
-          <div className="h-full relative w-full">
-            <svg className="w-full h-full" viewBox={`0 0 ${width} 32`} preserveAspectRatio="none">
-              {waveformBars.map((bar: any, index: number) => {
-                const barY = (32 - bar.height) / 2;
-                return (
-                  <rect
-                    key={index}
-                    x={bar.x}
-                    y={barY}
-                    width="2"
-                    height={bar.height}
-                    fill={bar.color || "#E961FF"}
-                    opacity={bar.opacity}
-                    data-speaker={bar.dominantSpeaker || ''}
+        {/* Expanded Group Header */}
+        <div
+          className="relative bg-[#2b2b2b] cursor-grab active:cursor-grabbing hover:bg-[#333333] transition-colors duration-150"
+          style={{ height: `${headerHeight}px` }}
+          onMouseDown={handleHeaderMouseDown}
+          onClick={handleHeaderClick}
+        >
+          <div className="flex items-center gap-2 px-2 py-1">
+            {/* Collapse Arrow */}
+            <div className="w-4 h-4 rounded-sm bg-[#E961FF] bg-opacity-20 shrink-0 flex items-center justify-center">
+              <button
+                className="w-3 h-3 flex items-center justify-center hover:scale-110 transition-transform"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onCollapseGroup?.(group.id);
+                }}
+                title="Collapse group"
+              >
+                <svg className="w-2.5 h-2.5 text-[#E961FF]" viewBox="0 0 16 16" fill="none">
+                  <path
+                    d="M4 6l4 4 4-4"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                   />
-                );
-              })}
-            </svg>
+                </svg>
+              </button>
+            </div>
+            
+            <div className="flex-1 min-w-0">
+              <p className="text-[#bbbbbb] text-[11px] font-semibold leading-[16px] truncate">
+                {group.name || 'Tracks group'} (expanded)
+              </p>
+            </div>
+            
+            <div className="text-[#888888] text-[10px] shrink-0">
+              {clips.length} clips
+            </div>
           </div>
         </div>
 
-        {/* Active Speaker Indicator */}
-        {(() => {
-          // Find the currently most active speaker based on the latest waveform data
-          const recentBars = waveformBars.slice(-5); // Last 5 bars
-          const activeSpeakers = recentBars
-            .filter((bar: any) => bar.dominantSpeaker && bar.opacity > 0.5)
-            .map((bar: any) => ({ name: bar.dominantSpeaker, color: bar.color }));
-          
-          if (activeSpeakers.length > 0) {
-            const currentSpeaker = activeSpeakers[activeSpeakers.length - 1];
+        {/* Stacked Clips */}
+        <div className="relative" style={{ height: `${totalHeight - headerHeight}px` }}>
+          {clips.map((clip, index) => {
+            const clipTop = index * (clipHeight + 2); // 2px spacing
+            const clipStartOffset = clip.startTime - startTime;
+            const clipLeftPercent = (clipStartOffset / duration) * 100;
+            const clipWidthPercent = (clip.duration / duration) * 100;
+            
             return (
-              <div 
-                className="absolute top-1 right-2 px-2 py-0.5 rounded text-xs font-medium shadow-lg border"
-                style={{ 
-                  backgroundColor: currentSpeaker.color + '20',
-                  borderColor: currentSpeaker.color,
-                  color: currentSpeaker.color
+              <div
+                key={clip.id}
+                className="absolute bg-[#1d1d1d] border border-[#333] rounded overflow-hidden"
+                style={{
+                  top: `${clipTop}px`,
+                  left: `${clipLeftPercent}%`,
+                  width: `${clipWidthPercent}%`,
+                  height: `${clipHeight}px`,
                 }}
               >
-                🎤 {currentSpeaker.name}
+                {/* Mini clip header */}
+                <div className="bg-[#2a2a2a] px-2 py-1 text-[10px] text-[#aaa] truncate">
+                  {clip.name}
+                </div>
+                
+                {/* Mini waveform */}
+                <div className="h-6 px-1 flex items-center">
+                  {clip.waveformData && (
+                    <svg className="w-full h-full" viewBox="0 0 100 20" preserveAspectRatio="none">
+                      {clip.waveformData.slice(0, 20).map((amplitude, i) => (
+                        <rect
+                          key={i}
+                          x={i * 5}
+                          y={(20 - amplitude * 16) / 2}
+                          width="3"
+                          height={amplitude * 16}
+                          fill={clip.waveformColor || '#E961FF'}
+                          opacity="0.8"
+                        />
+                      ))}
+                    </svg>
+                  )}
+                </div>
               </div>
             );
-          }
-          return null;
-        })()}
+          })}
+        </div>
 
-        {/* Selection Overlay */}
-        {selectionStart !== null && selectionEnd !== null && (
-          <div
-            className="absolute top-0 bottom-0 bg-[#E961FF] bg-opacity-30 border-l-2 border-r-2 border-[#E961FF] z-40 pointer-events-none"
-            style={{
-              left: `${(Math.min(selectionStart, selectionEnd) / duration) * width}px`,
-              width: `${(Math.abs(selectionEnd - selectionStart) / duration) * width}px`,
-            }}
-          />
+        {/* Group Trim Handles */}
+        {selected && (
+          <>
+            <div className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#E961FF] opacity-0 hover:opacity-50 transition-opacity z-20" 
+              title="Drag to trim group from start" 
+            />
+            <div className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#E961FF] opacity-0 hover:opacity-50 transition-opacity z-20" 
+              title="Drag to trim group from end" 
+            />
+          </>
         )}
       </div>
-
-      {/* Group Trim Handles */}
-      {selected && (
-        <>
-          <div 
-            className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#E961FF] opacity-0 hover:opacity-50 transition-opacity z-50"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              // TODO: Implement group trim start
-            }}
-          />
-          <div 
-            className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#E961FF] opacity-0 hover:opacity-50 transition-opacity z-50"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              // TODO: Implement group trim end
-            }}
-          />
-        </>
-      )}
-    </div>
-  );
+    );
+  }
 } 

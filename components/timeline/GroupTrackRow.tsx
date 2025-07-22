@@ -23,8 +23,6 @@ interface GroupTrackRowProps {
   onRangeSelect: (clipId: string, startOffset: number, endOffset: number) => void;
   onRangeSplit: (clipId: string, startOffset: number, endOffset: number) => void;
   onRangeDelete: (clipId: string, startOffset: number, endOffset: number) => void;
-  onExpandGroup: (groupId: string) => void;
-  onCollapseGroup: (groupId: string) => void;
 }
 
 const GroupTrackRow: React.FC<GroupTrackRowProps> = ({
@@ -32,19 +30,12 @@ const GroupTrackRow: React.FC<GroupTrackRowProps> = ({
   clips,
   onGroupClick,
   onGroupMouseDown,
-  onClipClick,
-  onClipMouseDown,
+  onClipClick: _onClipClick, // Renamed to indicate intentionally unused
+  onClipMouseDown: _onClipMouseDown, // Renamed to indicate intentionally unused
   timeToPixel,
-  zoomLevel,
-  snapState,
   dragState,
   selected,
-  rangeSelection,
-  onRangeSelect,
-  onRangeSplit,
-  onRangeDelete,
-  onExpandGroup,
-  onCollapseGroup,
+  rangeSelection: _rangeSelection, // Renamed to indicate intentionally unused
 }) => {
   // Calculate group bounds
   const groupStartTime = Math.min(...clips.map(c => c.startTime));

@@ -1,7 +1,6 @@
 import React from 'react';
 import { TimelineTrack, TimelineClip, TimelineGroup, DragState, SnapState, RangeSelection } from '../types/timeline';
 import TimelineClipComponent from '../TimelineClip';
-import GroupTrackRow from './GroupTrackRow';
 
 interface TrackRowProps {
   track: TimelineTrack;
@@ -31,26 +30,119 @@ const TrackRow: React.FC<TrackRowProps> = ({
   onClipClick,
   onClipMouseDown,
   timeToPixel,
-  zoomLevel,
-  snapState,
   dragState,
   isDropTarget,
   isValidDropTarget,
   groups,
-  rangeSelection,
+  rangeSelection: _rangeSelection, // Renamed to indicate intentionally unused
   onRangeSelect,
-  onRangeSplit,
-  onRangeDelete,
   onGroupClick,
   onGroupMouseDown,
   onExpandGroup,
-  onCollapseGroup,
+  onCollapseGroup: _onCollapseGroup, // Renamed to indicate intentionally unused
 }) => {
-  // Get groups for this track
-  const trackGroups = groups.filter(group => group.trackId === track.id);
-  
-  // Get clips that are not in any group
-  const ungroupedClips = clips.filter(clip => !clip.groupId);
+  // Filter clips that belong to collapsed groups
+  const visibleClips = clips.filter(clip => {
+    if (!clip.groupId) return true;
+    
+    const group = groups.find(g => g.id === clip.groupId);
+    return !group || !group.collapsed;
+  });
+
+  // Get collapsed groups for this track
+  const collapsedGroups = groups.filter(group => 
+    group.trackId === track.id && group.collapsed
+  );
+
+
+  const renderClip = (clip: TimelineClip) => {
+    const clipWidth = timeToPixel(clip.duration);
+    const clipLeft = timeToPixel(clip.startTime);
+
+    const isSelected = clip.selected;
+    const isDragging = dragState.isDragging && dragState.selectedClipIds.includes(clip.id);
+
+    return (
+      <div
+        key={clip.id}
+        className={`absolute top-1 ${isDragging ? 'opacity-75' : ''}`}
+        style={{
+          left: `${clipLeft}px`,
+          width: `${clipWidth}px`,
+          height: `${track.height - 4}px`,
+        }}
+      >
+        <TimelineClipComponent
+          id={clip.id}
+          fileName={clip.name}
+          duration={clip.duration}
+          startTime={clip.startTime}
+          width={clipWidth}
+          selected={isSelected}
+          waveformData={clip.waveformData}
+          waveformColor={clip.waveformColor}
+          onClipSelect={(clipId, event) => onClipClick(clipId, event)}
+                     onRangeSelect={(clipId: string, startOffset: number, endOffset: number) => onRangeSelect(clipId, startOffset, endOffset)}
+          onClipSplit={(clipId, splitPoint) => {
+            // Convert split point to range for consistency
+            const splitDuration = 0.1;
+            const startOffset = Math.max(0, splitPoint - splitDuration / 2);
+            const endOffset = Math.min(clip.duration, splitPoint + splitDuration / 2);
+            onRangeSelect(clipId, startOffset, endOffset);
+          }}
+          onClipDelete={(clipId) => {
+            // Select and delete entire clip
+            onClipClick(clipId, { stopPropagation: () => {} } as React.MouseEvent);
+          }}
+          onClipMouseDown={(e) => onClipMouseDown(clip.id, e, "move")}
+        />
+      </div>
+    );
+  };
+
+  const renderCollapsedGroup = (group: TimelineGroup) => {
+    const groupClips = clips.filter(clip => clip.groupId === group.id);
+    if (groupClips.length === 0) return null;
+
+    const startTime = Math.min(...groupClips.map(clip => clip.startTime));
+    const endTime = Math.max(...groupClips.map(clip => clip.endTime));
+    const duration = endTime - startTime;
+    
+    const groupWidth = timeToPixel(duration);
+    const groupLeft = timeToPixel(startTime);
+    const groupHeight = track.height - 4;
+
+    return (
+      <div
+        key={group.id}
+        data-group-id={group.id}
+        className="absolute top-1 cursor-pointer rounded-md border-2 border-[#555] bg-[#2a2a2a] overflow-hidden"
+        style={{
+          left: `${groupLeft}px`,
+          width: `${groupWidth}px`,
+          height: `${groupHeight}px`,
+        }}
+        onClick={(e) => onGroupClick(group.id, e)}
+        onMouseDown={(e) => {
+          if (e.button === 0) {
+            onGroupMouseDown(group.id, e, "move");
+          }
+        }}
+        onDoubleClick={() => onExpandGroup(group.id)}
+      >
+        <div className="p-2 h-full flex items-center">
+          <div className="text-xs text-white font-medium truncate">
+            {group.name} ({groupClips.length} clips)
+          </div>
+        </div>
+        
+        {/* Expand indicator */}
+        <div className="absolute top-1 right-1 text-xs text-[#888] cursor-pointer">
+          ▼
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div
@@ -84,85 +176,11 @@ const TrackRow: React.FC<TrackRowProps> = ({
         </div>
       )}
 
-      {/* Render Groups */}
-      {trackGroups.map(group => {
-        const groupClips = clips.filter(clip => clip.groupId === group.id);
-        if (groupClips.length === 0) {
-          return null;
-        }
-
-        // Check if group is selected (all clips in group are selected)
-        const isGroupSelected = group.clipIds.every(clipId =>
-          clips.some(clip => clip.id === clipId && clip.selected)
-        );
-        return (
-          <GroupTrackRow
-            key={`group-${group.id}`}
-            group={group}
-            clips={groupClips}
-            onGroupClick={onGroupClick}
-            onGroupMouseDown={onGroupMouseDown}
-            onClipClick={onClipClick}
-            onClipMouseDown={onClipMouseDown}
-            timeToPixel={timeToPixel}
-            zoomLevel={zoomLevel}
-            snapState={snapState}
-            dragState={dragState}
-            selected={isGroupSelected}
-            rangeSelection={rangeSelection}
-            onRangeSelect={onRangeSelect}
-            onRangeSplit={onRangeSplit}
-            onRangeDelete={onRangeDelete}
-            onExpandGroup={onExpandGroup}
-            onCollapseGroup={onCollapseGroup}
-          />
-        );
-      })}
-
-      {/* Render Ungrouped Clips */}
-      {ungroupedClips.map(clip => {
-        const clipWidth = timeToPixel(clip.duration);
-        const clipLeft = timeToPixel(clip.startTime);
-        const isDragging = dragState.isDragging && dragState.selectedClipIds.includes(clip.id);
-
-        return (
-          <div
-            key={`clip-${clip.id}`}
-            className={`absolute top-1 ${isDragging ? 'opacity-75' : ''}`}
-            style={{
-              left: `${clipLeft}px`,
-              width: `${clipWidth}px`,
-              height: `${track.height - 4}px`,
-            }}
-          >
-            <TimelineClipComponent
-              id={clip.id}
-              fileName={clip.name}
-              duration={clip.duration}
-              startTime={clip.startTime}
-              width={clipWidth}
-              selected={clip.selected}
-              waveformData={clip.waveformData}
-              waveformColor={clip.waveformColor}
-              onClipSelect={onClipClick}
-              onRangeSelect={onRangeSelect}
-              onClipSplit={(clipId, splitPoint) => {
-                // Convert split point to range for consistency
-                const splitDuration = 0.1;
-                const startOffset = Math.max(0, splitPoint - splitDuration / 2);
-                const endOffset = Math.min(clip.duration, splitPoint + splitDuration / 2);
-                onRangeSelect(clipId, startOffset, endOffset);
-              }}
-              onClipDelete={(clipId) => {
-                onClipClick(clipId, { stopPropagation: () => {} } as React.MouseEvent);
-              }}
-              onClipMouseDown={(e) => {
-                onClipMouseDown(clip.id, e, "move");
-              }}
-            />
-          </div>
-        );
-      })}
+      {/* Render visible clips */}
+      {visibleClips.map(renderClip)}
+      
+      {/* Render collapsed groups */}
+      {collapsedGroups.map(renderCollapsedGroup)}
     </div>
   );
 };

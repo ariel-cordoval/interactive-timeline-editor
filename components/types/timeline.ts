@@ -31,6 +31,7 @@ export interface TimelineGroup {
   clipIds: string[];
   color: string;
   trackId: string;
+  collapsed: boolean;
 }
 
 export interface TimelineState {
