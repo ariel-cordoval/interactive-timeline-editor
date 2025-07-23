@@ -8,6 +8,7 @@ import React, {
 // import TrackSelected from "../imports/Track-2-4144";
 import GroupButton from "../imports/Split-3-4833";
 import TimelineClip from "./TimelineClip";
+import { useSmoothZoom } from "./hooks/useSmoothZoom";
 // AudioManager removed - integrated functionality directly into timeline
 
 // Enhanced timeline state types
@@ -159,7 +160,7 @@ function GroupTrackRow({
 
   // Handle content area interaction - works exactly like TimelineClip
   const handleContentMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!contentRef.current || !group.collapsed) return;
+    if (!contentRef.current) return;
     
     e.preventDefault();
     e.stopPropagation();
@@ -178,6 +179,8 @@ function GroupTrackRow({
     
     let hasMoved = false;
     let isRangeSelection = false;
+    let currentSelectionStart = startOffset;  // Track locally to avoid React state timing issues
+    let currentSelectionEnd = startOffset;
     
     const handleMouseMove = (e: MouseEvent) => {
       if (!contentRef.current) return;
@@ -197,44 +200,53 @@ function GroupTrackRow({
           const rect = contentRef.current.getBoundingClientRect();
           const currentX = e.clientX - rect.left;
           const currentOffset = Math.max(0, Math.min(groupDuration, (currentX / rect.width) * groupDuration));
-          setSelectionEnd(currentOffset);
+          currentSelectionEnd = currentOffset;  // Update local variable
+          setSelectionEnd(currentOffset);  // Also update React state for visual feedback
           
-          console.log(`📍 Range selecting: ${Math.min(startOffset, currentOffset).toFixed(2)}s - ${Math.max(startOffset, currentOffset).toFixed(2)}s`);
+
         }
       }
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (mouseUpEvent: MouseEvent) => {
+      // IMMEDIATELY remove event listeners to prevent multiple triggers
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      
       setIsSelecting(false);
       const timeDelta = Date.now() - mouseDownTime;
       
       // If this was a simple click (no movement and quick), select the group
       if (!hasMoved && timeDelta < 500) {
-        console.log('👆 Simple click in group content area - selecting group');
         setSelectionStart(null);
         setSelectionEnd(null);
         onGroupClick(group.id, e as any);
-      } else if (isRangeSelection && selectionStart !== null && selectionEnd !== null) {
-        // This was a horizontal drag for range selection
-        const start = Math.min(selectionStart, selectionEnd);
-        const end = Math.max(selectionStart, selectionEnd);
+      } else if (isRangeSelection && currentSelectionStart !== null && currentSelectionEnd !== null) {
+        // This was a horizontal drag for range selection - use local variables instead of React state
+        const start = Math.min(currentSelectionStart, currentSelectionEnd);
+        const end = Math.max(currentSelectionStart, currentSelectionEnd);
         
         // Only trigger range select if there's a meaningful selection (> 0.2 seconds)
         if (Math.abs(end - start) > 0.2) {
           // Use the group ID as the clip ID for range operations
-          onRangeSelect(group.id, start, end);
-          console.log(`✂️ Selected range in group for editing: ${start.toFixed(2)}s - ${end.toFixed(2)}s (${Math.abs(end - start).toFixed(2)}s duration)`);
+          // Defer the range selection to ensure it happens after any other mouse up handlers
+          setTimeout(() => {
+            onRangeSelect(group.id, start, end);
+          }, 0);
+          
+          // Prevent any other event handlers from running
+          mouseUpEvent.stopPropagation();
+          mouseUpEvent.preventDefault();
+          return; // Exit early to prevent any further event handling
         } else {
           // Clear selection if it's too small
           setSelectionStart(null);
           setSelectionEnd(null);
           // If selection was too small, just select the group
-          console.log('👆 Range too small - selecting group instead');
           onGroupClick(group.id, e as any);
         }
       } else if (hasMoved && !isRangeSelection) {
         // This was a vertical drag or other movement - just select the group
-        console.log('👆 Non-range movement - selecting group');
         setSelectionStart(null);
         setSelectionEnd(null);
         onGroupClick(group.id, e as any);
@@ -243,14 +255,11 @@ function GroupTrackRow({
         setSelectionStart(null);
         setSelectionEnd(null);
       }
-      
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
     };
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [group.collapsed, group.id, groupDuration, onRangeSelect, onGroupClick, selectionStart, selectionEnd]);
+  }, [group.id, groupDuration, onRangeSelect, onGroupClick, selectionStart, selectionEnd]);
 
   // Clear selection
   const clearSelection = useCallback(() => {
@@ -425,7 +434,6 @@ function GroupTrackRow({
             left: `${timeToPixel(groupStartTime)}px`,
             width: `${groupWidth}px`,
             zIndex: selected ? 15 : 10,
-            transform: `scaleX(${zoomLevel})`,
           }}
           data-group-id={group.id}
         >
@@ -655,7 +663,6 @@ function GroupTrackRow({
             width: `${groupWidth}px`,
             height: `${totalHeight}px`,
             zIndex: selected ? 15 : 10,
-            transform: `scaleX(${zoomLevel})`,
           }}
           data-group-id={group.id}
         >
@@ -781,7 +788,6 @@ function GroupTrackRow({
                   width: `${timeToPixel(clip.duration)}px`,
                   height: `${clipHeight}px`,
                   zIndex: clip.selected ? 15 : 10,
-                  transform: `scaleX(${zoomLevel})`,
                 }}
               >
                 <div 
@@ -968,7 +974,6 @@ function InteractiveTrack({
         left: `${timeToPixel(clip.startTime)}px`,
         width: `${timeToPixel(clip.duration)}px`,
         zIndex: clip.selected ? 15 : 10,
-        transform: `scaleX(${zoomLevel})`,
       }}
       data-clip-id={clip.id}
     >
@@ -1129,7 +1134,6 @@ function TrackRow({
               left: `${timeToPixel(groupStartTime)}px`,
               width: `${groupWidth}px`,
               zIndex: isGroupSelected ? 15 : 10,
-              transform: `scaleX(${zoomLevel})`,
             }}
             data-group-id={group.id}
           >
@@ -1229,40 +1233,107 @@ function TimelineRuler({
   zoomLevel: number;
 }) {
   const timemarks = [];
-  const visibleDuration = totalDuration / zoomLevel; // Match main timeline calculation
+  const minorMarks = [];
+  const visibleDuration = totalDuration / zoomLevel;
   
-  // Calculate appropriate interval based on visible duration and zoom level
+  // Enhanced interval calculation with frame-level precision support
   let interval = 1; // Start with 1 second
+  let showMinorTicks = false;
+  let showFrames = false;
+  const frameRate = 30; // Assume 30fps for frame calculations
   
-  // Adaptive interval based on visible duration to prevent overcrowding
-  if (visibleDuration > 600) interval = 60;      // 1 minute for very long durations
-  else if (visibleDuration > 300) interval = 30; // 30s for long durations  
-  else if (visibleDuration > 120) interval = 15; // 15s for medium durations
-  else if (visibleDuration > 60) interval = 10;  // 10s for moderate durations
-  else if (visibleDuration > 30) interval = 5;   // 5s for shorter durations
-  else if (visibleDuration > 15) interval = 2;   // 2s for short durations
-  else interval = 1;                              // 1s for very short durations
+  // Adaptive interval based on visible duration and zoom level
+  if (visibleDuration > 600) {
+    interval = 60; // 1 minute for very long durations
+  } else if (visibleDuration > 300) {
+    interval = 30; // 30s for long durations  
+  } else if (visibleDuration > 120) {
+    interval = 15; // 15s for medium durations
+  } else if (visibleDuration > 60) {
+    interval = 10; // 10s for moderate durations
+  } else if (visibleDuration > 30) {
+    interval = 5; // 5s for shorter durations
+    showMinorTicks = true;
+  } else if (visibleDuration > 15) {
+    interval = 2; // 2s for short durations
+    showMinorTicks = true;
+  } else if (visibleDuration > 5) {
+    interval = 1; // 1s for very short durations
+    showMinorTicks = true;
+  } else if (visibleDuration > 2) {
+    interval = 0.5; // 500ms intervals
+    showMinorTicks = true;
+  } else if (visibleDuration > 1) {
+    interval = 0.2; // 200ms intervals  
+    showMinorTicks = true;
+  } else {
+    // Frame-level precision for extreme zoom
+    interval = 1 / frameRate; // Frame intervals (~33.33ms for 30fps)
+    showFrames = true;
+  }
   
-  // Generate time marks within visible duration
+  // Generate major time marks
   for (let i = 0; i <= visibleDuration; i += interval) {
-    if (i <= totalDuration) { // Don't show markers beyond actual content
+    if (i <= totalDuration) {
       timemarks.push(i);
     }
   }
+  
+  // Generate minor tick marks for better precision
+  if (showMinorTicks && !showFrames) {
+    const minorInterval = interval / 5;
+    for (let i = 0; i <= visibleDuration; i += minorInterval) {
+      if (i <= totalDuration && i % interval !== 0) { // Skip major ticks
+        minorMarks.push(i);
+      }
+    }
+  }
+
+  // Format time labels based on precision level
+  const formatTime = (time: number): string => {
+    if (showFrames) {
+      // Show frame numbers for extreme zoom
+      const frameNumber = Math.round(time * frameRate);
+      const seconds = Math.floor(time);
+      const frames = frameNumber % frameRate;
+      return `${seconds}:${frames.toString().padStart(2, '0')}f`;
+    } else if (interval < 1) {
+      // Show milliseconds for sub-second intervals
+      const seconds = Math.floor(time);
+      const ms = Math.round((time % 1) * 1000);
+      return `${seconds}.${ms.toString().padStart(3, '0')}`;
+    } else {
+      // Standard MM:SS format
+      const minutes = Math.floor(time / 60);
+      const seconds = Math.floor(time % 60);
+      return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+    }
+  };
 
   return (
     <div className="relative h-6 bg-[#0d0d0d] border-b border-[#2b2b2b]">
+      {/* Major time markers */}
       {timemarks.map((time) => (
         <div
-          key={time}
-          className="absolute top-0 bottom-0 flex flex-col items-center justify-center text-xs text-[#555555]"
+          key={`major-${time}`}
+          className="absolute top-0 bottom-0 flex flex-col items-center justify-center text-xs text-[#888888]"
           style={{ left: `${40 + timeToPixel(time)}px` }}
         >
-          <div className="h-2 w-px bg-[#2b2b2b] mb-1" />
-          <span className="font-medium">
-            {String(Math.floor(time / 60)).padStart(2, "0")}:
-            {String(Math.floor(time % 60)).padStart(2, "0")}
+          <div className="h-3 w-px bg-[#666666] mb-1" />
+          <span className="font-medium text-[10px]">
+            {formatTime(time)}
           </span>
+        </div>
+      ))}
+      
+      {/* Minor tick marks */}
+      {minorMarks.map((time) => (
+        <div
+          key={`minor-${time}`}
+          className="absolute top-0"
+          style={{ left: `${40 + timeToPixel(time)}px` }}
+        >
+          <div className="h-2 w-px bg-[#444444]" />
         </div>
       ))}
     </div>
@@ -1540,14 +1611,14 @@ function InteractiveControls({
                       <div
                         className="absolute bg-neutral-50 h-1 left-0 rounded-[100px] top-0"
                         style={{
-                          width: `${(zoomLevel - 0.5) * 100}px`,
+                          width: `${Math.min(84, Math.max(0, (Math.log10(zoomLevel) + 1) / 2.7 * 84))}px`,
                         }}
                       />
                     </div>
                     <div
                       className="absolute flex items-center justify-center size-4 top-0 cursor-pointer"
                       style={{
-                        left: `${(zoomLevel - 0.5) * 84}px`,
+                        left: `${Math.min(84, Math.max(0, (Math.log10(zoomLevel) + 1) / 2.7 * 84))}px`,
                       }}
                       onMouseDown={(e) => {
                         const startX = e.clientX;
@@ -1557,14 +1628,10 @@ function InteractiveControls({
                           e: MouseEvent,
                         ) => {
                           const deltaX = e.clientX - startX;
-                          const deltaZoom = deltaX / 84;
-                          const newZoom = Math.max(
-                            0.5,
-                            Math.min(
-                              2.5,
-                              startZoom + deltaZoom,
-                            ),
-                          );
+                          // Convert position to logarithmic zoom scale (0.1 to 50)
+                          const sliderPos = Math.max(0, Math.min(84, (Math.log10(startZoom) + 1) / 2.7 * 84 + deltaX));
+                          const logZoom = (sliderPos / 84) * 2.7 - 1; // -1 to 1.7 (log scale)
+                          const newZoom = Math.max(0.1, Math.min(50, Math.pow(10, logZoom)));
                           onZoomSlider(newZoom);
                         };
 
@@ -1783,6 +1850,39 @@ export default function InteractiveTrackEditor({
       totalDuration: calculateInitialDuration(initialTracks),
     });
 
+  // Initialize smooth zoom hook
+  const smoothZoom = useSmoothZoom(
+    timelineState.zoomLevel,
+    timelineState.totalDuration,
+    {
+      minZoom: 0.1,
+      maxZoom: 50,
+      animationDuration: 100,
+      zoomStep: 1.4,
+      wheelSensitivity: 0.005,
+    }
+  );
+
+  // Sync smooth zoom state with timeline state and reset viewport offset when needed
+  useEffect(() => {
+    setTimelineState((prev) => ({
+      ...prev,
+      zoomLevel: smoothZoom.zoomLevel,
+    }));
+    
+    // Reset viewport offset if zoom changed significantly
+    const timelineWidth = 1262;
+    const totalWidth = timelineWidth * smoothZoom.zoomLevel;
+    const maxOffset = Math.max(0, totalWidth - timelineWidth);
+    
+    setViewportOffset(prevOffset => {
+      if (prevOffset > maxOffset) {
+        return maxOffset;
+      }
+      return prevOffset;
+    });
+  }, [smoothZoom.zoomLevel]);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const trackAreaRef = useRef<HTMLDivElement>(null);
   
@@ -1792,6 +1892,8 @@ export default function InteractiveTrackEditor({
     startOffset: number;
     endOffset: number;
   } | null>(null);
+  
+
   
   // Clipboard state for copy/paste operations
   const [clipboardData, setClipboardData] = useState<{
@@ -1851,6 +1953,78 @@ export default function InteractiveTrackEditor({
       onTimelineChange(timelineState);
     }
   }, [timelineState, onTimelineChange]);
+
+  // State for zoom hint tooltip
+  const [showZoomHint, setShowZoomHint] = useState(false);
+  const zoomHintTimeoutRef = useRef<number | null>(null);
+
+  // State for timeline panning/scrolling
+  const [viewportOffset, setViewportOffset] = useState(0);
+
+  // Add mouse wheel handling for zoom (Cmd+scroll) and pan (scroll)
+  useEffect(() => {
+    const handleWheel = (event: WheelEvent) => {
+      // Only handle wheel events over the timeline area
+      if (!containerRef.current?.contains(event.target as Node)) return;
+      
+      // Check if Cmd key is held for zoom
+      if (event.metaKey) {
+        // Hide hint if showing
+        if (showZoomHint) {
+          setShowZoomHint(false);
+          if (zoomHintTimeoutRef.current) {
+            clearTimeout(zoomHintTimeoutRef.current);
+          }
+        }
+        
+        // Skip if zooming is disabled (e.g., during animations)
+        if (smoothZoom.isAnimating) return;
+
+        event.preventDefault();
+        
+        const rect = containerRef.current.getBoundingClientRect();
+        smoothZoom.handleWheelZoom(event, {
+          clientX: event.clientX,
+          containerRect: rect,
+          timelineWidth: 1262,
+          totalDuration: timelineState.totalDuration,
+        });
+      } else {
+        // Horizontal panning without Cmd key
+        event.preventDefault();
+        
+        const timelineWidth = 1262;
+        const visibleDuration = timelineState.totalDuration / smoothZoom.zoomLevel;
+        const totalWidth = timelineWidth * smoothZoom.zoomLevel;
+        const maxOffset = Math.max(0, totalWidth - timelineWidth);
+        
+        // Calculate scroll sensitivity based on zoom level
+        const scrollSensitivity = 30;
+        // Use horizontal scroll if available, otherwise use vertical scroll
+        const deltaOffset = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+        
+        setViewportOffset(prevOffset => {
+          const newOffset = prevOffset + deltaOffset * scrollSensitivity / 10;
+          const clampedOffset = Math.max(0, Math.min(maxOffset, newOffset));
+          
+          return clampedOffset;
+        });
+      }
+    };
+
+    // Add wheel event listener to container
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener('wheel', handleWheel, { passive: false });
+      
+      return () => {
+        container.removeEventListener('wheel', handleWheel);
+        if (zoomHintTimeoutRef.current) {
+          clearTimeout(zoomHintTimeoutRef.current);
+        }
+      };
+    }
+  }, [smoothZoom, timelineState.totalDuration, showZoomHint, viewportOffset]);
 
   // Load default audio files on component mount
   useEffect(() => {
@@ -1923,24 +2097,26 @@ export default function InteractiveTrackEditor({
     loadDefaults();
   }, [loadDefaultAudioFiles]);
 
-  // Convert time to pixel position
+  // Convert time to pixel position (using smooth zoom level and viewport offset)
   const timeToPixel = useCallback(
     (time: number) => {
       const timelineWidth = 1262;
-      const visibleDuration = timelineState.totalDuration / timelineState.zoomLevel; // Use dynamic duration
-      return (time / visibleDuration) * timelineWidth;
+      const visibleDuration = timelineState.totalDuration / smoothZoom.zoomLevel;
+      const startTime = viewportOffset / timelineWidth * visibleDuration;
+      return ((time - startTime) / visibleDuration) * timelineWidth;
     },
-    [timelineState.zoomLevel, timelineState.totalDuration],
+    [smoothZoom.zoomLevel, timelineState.totalDuration, viewportOffset],
   );
 
-  // Convert pixel position to time
+  // Convert pixel position to time (using smooth zoom level and viewport offset)
   const pixelToTime = useCallback(
     (pixel: number) => {
       const timelineWidth = 1262;
-      const visibleDuration = timelineState.totalDuration / timelineState.zoomLevel; // Use dynamic duration
-      return (pixel / timelineWidth) * visibleDuration;
+      const visibleDuration = timelineState.totalDuration / smoothZoom.zoomLevel;
+      const startTime = viewportOffset / timelineWidth * visibleDuration;
+      return startTime + (pixel / timelineWidth) * visibleDuration;
     },
-    [timelineState.zoomLevel, timelineState.totalDuration],
+    [smoothZoom.zoomLevel, timelineState.totalDuration, viewportOffset],
   );
 
   // Enhanced track detection for improved vertical drag-and-drop
@@ -2577,8 +2753,10 @@ export default function InteractiveTrackEditor({
               })),
             }));
             
-            // Clear range selection when clicking on components
-            setRangeSelection(null);
+            // Clear range selection when clicking on components, but preserve if it's for the same clip
+            if (rangeSelection && rangeSelection.clipId !== clipId) {
+              setRangeSelection(null);
+            }
 
           }
           // If clip is not selected, do nothing (let normal clip selection handle it)
@@ -2603,8 +2781,10 @@ export default function InteractiveTrackEditor({
                 })),
               }));
               
-              // Clear range selection when clicking on components
-              setRangeSelection(null);
+              // Clear range selection when clicking on components, but preserve if it's for the same group
+              if (rangeSelection && rangeSelection.clipId !== groupId) {
+                setRangeSelection(null);
+              }
 
             }
           }
@@ -4106,38 +4286,47 @@ export default function InteractiveTrackEditor({
     };
   }, []);
 
-  // Handle zoom
-  const handleZoomIn = useCallback(() => {
-    setTimelineState((prev) => {
-      const newZoomLevel = Math.min(prev.zoomLevel * 1.2, 3);
-      console.log(`🔍 Zoom In: ${prev.zoomLevel.toFixed(2)}x → ${newZoomLevel.toFixed(2)}x`);
-      return {
-        ...prev,
-        zoomLevel: newZoomLevel,
-      };
-    });
-  }, []);
+  // Enhanced zoom handlers using smooth zoom
+  const handleZoomIn = useCallback((event?: React.MouseEvent) => {
+    console.log(`🔍 Zoom In: ${smoothZoom.zoomLevel.toFixed(2)}x → ${(smoothZoom.zoomLevel * 1.4).toFixed(2)}x`);
+    
+    if (event && containerRef.current) {
+      // Zoom to cursor position
+      const rect = containerRef.current.getBoundingClientRect();
+      smoothZoom.zoomIn({
+        clientX: event.clientX,
+        containerRect: rect,
+        timelineWidth: 1262,
+        totalDuration: timelineState.totalDuration,
+      });
+    } else {
+      // Default zoom to center
+      smoothZoom.zoomIn();
+    }
+  }, [smoothZoom, timelineState.totalDuration]);
 
-  const handleZoomOut = useCallback(() => {
-    setTimelineState((prev) => {
-      const newZoomLevel = Math.max(prev.zoomLevel / 1.2, 0.5);
-      console.log(`🔍 Zoom Out: ${prev.zoomLevel.toFixed(2)}x → ${newZoomLevel.toFixed(2)}x`);
-      return {
-        ...prev,
-        zoomLevel: newZoomLevel,
-      };
-    });
-  }, []);
+  const handleZoomOut = useCallback((event?: React.MouseEvent) => {
+    console.log(`🔍 Zoom Out: ${smoothZoom.zoomLevel.toFixed(2)}x → ${(smoothZoom.zoomLevel / 1.4).toFixed(2)}x`);
+    
+    if (event && containerRef.current) {
+      // Zoom to cursor position
+      const rect = containerRef.current.getBoundingClientRect();
+      smoothZoom.zoomOut({
+        clientX: event.clientX,
+        containerRect: rect,
+        timelineWidth: 1262,
+        totalDuration: timelineState.totalDuration,
+      });
+    } else {
+      // Default zoom to center
+      smoothZoom.zoomOut();
+    }
+  }, [smoothZoom, timelineState.totalDuration]);
 
   const handleZoomSlider = useCallback((value: number) => {
-    setTimelineState((prev) => {
-      console.log(`🔍 Zoom Slider: ${prev.zoomLevel.toFixed(2)}x → ${value.toFixed(2)}x`);
-      return {
-        ...prev,
-        zoomLevel: value,
-      };
-    });
-  }, []);
+    console.log(`🔍 Zoom Slider: ${smoothZoom.zoomLevel.toFixed(2)}x → ${value.toFixed(2)}x`);
+    smoothZoom.setZoomLevel(value, true);
+  }, [smoothZoom]);
 
   // handleTrackAdded removed - functionality integrated into handleFileSelect
 
@@ -4945,14 +5134,6 @@ export default function InteractiveTrackEditor({
     };
 
     const handleMouseUp = () => {
-      console.log('🔚 Mouse up handler called', {
-        isDragging: dragState.isDragging,
-        dragType: dragState.dragType,
-        isValidDrop: dragState.isValidDrop,
-        collisionDetected: dragState.collisionDetected,
-        targetTrackId: dragState.targetTrackId,
-        selectedClipIds: dragState.selectedClipIds
-      });
 
       // Handle mouse up from mouse down state (click without drag)
       if (mouseDownState.isMouseDown) {
@@ -5271,7 +5452,6 @@ export default function InteractiveTrackEditor({
     
     if (group) {
       // For group range selections, keep the group selected
-      console.log(`📍 Group range selection: keeping group ${group.name} selected`);
       
       // Ensure the group remains selected
       setTimelineState((prev) => ({
@@ -5287,7 +5467,6 @@ export default function InteractiveTrackEditor({
       }));
     } else {
       // For individual clip range selections, only keep that clip selected
-      console.log(`📍 Individual clip range selection: selecting only clip ${clipId}`);
       
       setTimelineState((prev) => ({
         ...prev,
@@ -5609,7 +5788,7 @@ export default function InteractiveTrackEditor({
         totalDuration={timelineState.totalDuration}
         isPlaying={timelineState.isPlaying}
         selectedClips={timelineState.selectedClips}
-        zoomLevel={timelineState.zoomLevel}
+        zoomLevel={smoothZoom.zoomLevel}
         hasGroupedSelection={hasGroupedSelection()}
         rangeSelection={rangeSelection}
         onRangeSplit={handleRangeSplit}
@@ -5628,7 +5807,7 @@ export default function InteractiveTrackEditor({
         <TimelineRuler
           timeToPixel={timeToPixel}
           totalDuration={timelineState.totalDuration}
-          zoomLevel={timelineState.zoomLevel}
+          zoomLevel={smoothZoom.zoomLevel}
         />
       </div>
 
@@ -5648,6 +5827,34 @@ export default function InteractiveTrackEditor({
         timeToPixel={timeToPixel}
         snapState={snapState}
       />
+
+      {/* Zoom Hint Tooltip */}
+      {showZoomHint && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 bg-[#1a1a1a] border border-[#444444] text-white px-4 py-2 rounded-lg shadow-lg pointer-events-none">
+          <div className="flex items-center gap-2">
+            <kbd className="px-2 py-1 bg-[#333333] border border-[#555555] rounded text-xs">⌘</kbd>
+            <span className="text-sm">+ scroll to zoom</span>
+          </div>
+        </div>
+      )}
+
+      {/* Horizontal Scroll Indicator */}
+      {smoothZoom.zoomLevel > 1.1 && (
+        <div className="absolute bottom-4 right-4 z-40 bg-[#1a1a1a] border border-[#444444] px-3 py-1 rounded-lg text-xs text-[#888888] pointer-events-none">
+          <div className="flex items-center gap-2">
+            <span>Scroll to navigate</span>
+            <div className="w-16 h-1 bg-[#333333] rounded-full relative">
+              <div 
+                className="h-full bg-[#E961FF] rounded-full transition-all duration-150"
+                style={{ 
+                  width: `${Math.min(100, (1262 / (1262 * smoothZoom.zoomLevel)) * 100)}%`,
+                  marginLeft: `${(viewportOffset / (1262 * smoothZoom.zoomLevel - 1262)) * (100 - (1262 / (1262 * smoothZoom.zoomLevel)) * 100)}%`
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Track Area with Background Click Handler */}
       <div
