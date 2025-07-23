@@ -3639,57 +3639,8 @@ export default function InteractiveTrackEditor({
     setRangeSelection(null);
   }, [audioTracks, timelineState.tracks, generateWaveformFromAudio, calculateTimelineDuration]);
 
-  // Handle range-based delete operation with gap preservation
-  const handleRangeDelete = useCallback((clipOrGroupId: string, startOffset: number, endOffset: number) => {
-    console.log(`🗑️ Range delete: ${clipOrGroupId} from ${startOffset.toFixed(2)}s to ${endOffset.toFixed(2)}s - creating gap`);
-    
-    // Check if this is a group ID or clip ID
-    const allClips = timelineState.tracks.flatMap((track) => track.clips);
-    const group = timelineState.groups.find((g) => g.id === clipOrGroupId);
-    
-    if (group) {
-      // This is a group - delete range from all clips in the group within the selected range
-      console.log(`   📋 Group range delete: ${group.name} (${group.clipIds.length} clips)`);
-      console.log(`   🎯 Range: ${startOffset.toFixed(2)}s - ${endOffset.toFixed(2)}s`);
-      
-      // Calculate absolute time range
-      const groupClips = allClips.filter(clip => group.clipIds.includes(clip.id));
-      if (groupClips.length === 0) {
-        console.error(`❌ No clips found in group ${clipOrGroupId}`);
-        return;
-      }
-      
-      const groupStartTime = Math.min(...groupClips.map(c => c.startTime));
-      const absoluteStartTime = groupStartTime + startOffset;
-      const absoluteEndTime = groupStartTime + endOffset;
-      
-      console.log(`   🌍 Absolute range: ${absoluteStartTime.toFixed(2)}s - ${absoluteEndTime.toFixed(2)}s`);
-      
-      // Delete range from each clip in the group that intersects with the selected range
-      groupClips.forEach(clip => {
-        // Check if this clip intersects with the selected range
-        if (clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime) {
-          // Calculate relative offsets within this clip
-          const clipRelativeStart = Math.max(0, absoluteStartTime - clip.startTime);
-          const clipRelativeEnd = Math.min(clip.duration, absoluteEndTime - clip.startTime);
-          
-          console.log(`   🗑️ Deleting from clip ${clip.name}: ${clipRelativeStart.toFixed(2)}s - ${clipRelativeEnd.toFixed(2)}s`);
-          
-          // Call range delete on this individual clip
-          handleRangeDelete(clip.id, clipRelativeStart, clipRelativeEnd);
-        }
-      });
-      
-      return;
-    }
-    
-    // This is an individual clip
-    const clip = allClips.find((c) => c.id === clipOrGroupId);
-    if (!clip) {
-      console.error(`❌ Clip ${clipOrGroupId} not found for delete operation`);
-      return;
-    }
-    
+  // Helper function for individual clip range deletion
+  const deleteRangeFromClip = useCallback((clip: TimelineClip, startOffset: number, endOffset: number) => {
     console.log(`   📋 Individual clip range delete: ${clip.name}`);
 
     // Find the corresponding audio track data
@@ -3760,65 +3711,124 @@ export default function InteractiveTrackEditor({
           audioData: secondSegmentData
         });
       }
-      
-      console.log(`   🎵 Created ${newAudioSegments.length} audio segments for delete operation`);
-    } else {
-      // Fallback for clips without audio data
-      console.log(`   ⚠️ No audio data found for ${clip.name}, creating clips without audio segments`);
-      
-      if (startOffset > 0) {
-        newClips.push({
-          ...clip,
-          id: `${clip.id}-before-${Date.now()}`,
-          endTime: clip.startTime + startOffset,
-          duration: startOffset,
-          selected: false,
-          waveformData: clip.waveformData,
-          waveformColor: clip.waveformColor,
-          sourceStartOffset: clip.sourceStartOffset,
-        });
-      }
-
-      if (endOffset < clip.duration) {
-        newClips.push({
-          ...clip,
-          id: `${clip.id}-after-${Date.now()}`,
-          startTime: clip.startTime + endOffset,
-          endTime: clip.endTime,
-          duration: clip.duration - endOffset,
-          selected: false,
-          waveformData: clip.waveformData,
-          waveformColor: clip.waveformColor,
-          sourceStartOffset: clip.sourceStartOffset + endOffset,
-        });
-      }
     }
 
-    // Update audio tracks with new segments FIRST
-    if (newAudioSegments.length > 0 && audioTrack) {
-      setAudioTracks(prev => prev.map(track => {
-        if (track.name === clip.name || track.file.name.includes(clip.name)) {
-          // Remove old segments for this clip if they exist
-          const filteredSegments = (track.segments || []).filter((seg: AudioTrackSegment) => seg.clipId !== clip.id);
+    return { newClips, newAudioSegments, originalClip: clip };
+  }, [audioTracks, generateWaveformFromAudio]);
+
+  // Handle range-based delete operation with gap preservation
+  const handleRangeDelete = useCallback((clipOrGroupId: string, startOffset: number, endOffset: number) => {
+    console.log(`🗑️ Range delete: ${clipOrGroupId} from ${startOffset.toFixed(2)}s to ${endOffset.toFixed(2)}s - creating gap`);
+    
+    // Check if this is a group ID or clip ID
+    const allClips = timelineState.tracks.flatMap((track) => track.clips);
+    const group = timelineState.groups.find((g) => g.id === clipOrGroupId);
+    
+    if (group) {
+      // This is a group - delete range from all clips in the group within the selected range
+      console.log(`   📋 Group range delete: ${group.name} (${group.clipIds.length} clips)`);
+      console.log(`   🎯 Range: ${startOffset.toFixed(2)}s - ${endOffset.toFixed(2)}s`);
+      
+      // Calculate absolute time range
+      const groupClips = allClips.filter(clip => group.clipIds.includes(clip.id));
+      if (groupClips.length === 0) {
+        console.error(`❌ No clips found in group ${clipOrGroupId}`);
+        return;
+      }
+      
+      const groupStartTime = Math.min(...groupClips.map(c => c.startTime));
+      const absoluteStartTime = groupStartTime + startOffset;
+      const absoluteEndTime = groupStartTime + endOffset;
+      
+      console.log(`   🌍 Absolute range: ${absoluteStartTime.toFixed(2)}s - ${absoluteEndTime.toFixed(2)}s`);
+      
+      // Collect all changes before applying them
+      const allChanges: { newClips: TimelineClip[], newAudioSegments: AudioTrackSegment[], originalClip: TimelineClip }[] = [];
+      
+      // Delete range from each clip in the group that intersects with the selected range
+      groupClips.forEach(clip => {
+        // Check if this clip intersects with the selected range
+        if (clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime) {
+          // Calculate relative offsets within this clip
+          const clipRelativeStart = Math.max(0, absoluteStartTime - clip.startTime);
+          const clipRelativeEnd = Math.min(clip.duration, absoluteEndTime - clip.startTime);
           
-          return {
-            ...track,
-            segments: [
-              ...filteredSegments,
-              ...newAudioSegments
-            ]
-          };
+          console.log(`   🗑️ Deleting from clip ${clip.name}: ${clipRelativeStart.toFixed(2)}s - ${clipRelativeEnd.toFixed(2)}s`);
+          
+          // Use the helper function instead of recursive call
+          const changes = deleteRangeFromClip(clip, clipRelativeStart, clipRelativeEnd);
+          allChanges.push(changes);
         }
-        return track;
-      }));
+      });
+      
+      // Apply all changes at once
+      if (allChanges.length > 0) {
+        setTimelineState((prev) => {
+          const updatedTracks = prev.tracks.map((track) => ({
+            ...track,
+            clips: track.clips.flatMap((c) => {
+              // Check if this clip was modified
+              const change = allChanges.find(ch => ch.originalClip.id === c.id);
+              if (change) {
+                // Replace with new clips
+                return change.newClips;
+              }
+              return c;
+            }),
+          }));
+
+          const newDuration = calculateTimelineDuration(updatedTracks);
+
+          return {
+            ...prev,
+            tracks: updatedTracks,
+            totalDuration: newDuration,
+          };
+        });
+
+        // Update audio tracks
+        setAudioTracks((prev) => {
+          let updated = [...prev];
+          allChanges.forEach(change => {
+            change.newAudioSegments.forEach(segment => {
+              const audioTrack = updated.find(t => 
+                t.name === change.originalClip.name || t.file.name.includes(change.originalClip.name)
+              );
+              if (audioTrack) {
+                                 audioTrack.segments = audioTrack.segments
+                   .filter((s: { clipId: string; startTime: number; endTime: number; sourceOffset: number }) => s.clipId !== change.originalClip.id)
+                  .concat({
+                    clipId: segment.clipId,
+                    startTime: segment.startTime,
+                    endTime: segment.startTime + segment.duration,
+                    sourceOffset: 0
+                  });
+              }
+            });
+          });
+          return updated;
+        });
+      }
+      
+      return;
     }
+    
+    // This is an individual clip
+    const clip = allClips.find((c) => c.id === clipOrGroupId);
+    if (!clip) {
+      console.error(`❌ Clip ${clipOrGroupId} not found for delete operation`);
+      return;
+    }
+    
+    // Use the helper function for individual clip range deletion
+    const { newClips, newAudioSegments, originalClip } = deleteRangeFromClip(clip, startOffset, endOffset);
 
     // Update timeline state with new clips
     setTimelineState((prev) => {
       const updatedTracks = prev.tracks.map((track) => ({
         ...track,
         clips: track.clips.flatMap((c) => {
-          if (c.id !== clip.id) return c;
+          if (c.id !== originalClip.id) return c;
           return newClips;
         }),
       }));
@@ -3833,10 +3843,29 @@ export default function InteractiveTrackEditor({
         totalDuration: newDuration,
       };
     });
+
+    // Update audio tracks with new segments
+    if (newAudioSegments.length > 0) {
+      setAudioTracks(prev => prev.map(track => {
+        if (track.name === originalClip.name || track.file.name.includes(originalClip.name)) {
+          // Remove old segments for this clip if they exist
+          const filteredSegments = (track.segments || []).filter((seg: AudioTrackSegment) => seg.clipId !== originalClip.id);
+          
+          return {
+            ...track,
+            segments: [
+              ...filteredSegments,
+              ...newAudioSegments
+            ]
+          };
+        }
+        return track;
+      }));
+    }
     
     // Clear the range selection after delete
     setRangeSelection(null);
-  }, [audioTracks, timelineState.tracks, generateWaveformFromAudio, calculateTimelineDuration]);
+  }, [audioTracks, timelineState.tracks, generateWaveformFromAudio, calculateTimelineDuration, deleteRangeFromClip]);
 
   // Handle delete operation for multiple clips
   const handleDelete = useCallback(() => {
