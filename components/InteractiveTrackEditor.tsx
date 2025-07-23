@@ -6073,7 +6073,247 @@ export default function InteractiveTrackEditor({
         onClick={handleBackgroundClick}
       >
         <div className="pl-[40px] pr-4 py-2">
+          {/* First, render expanded groups */}
+          {timelineState.groups.filter(group => !group.collapsed).map(group => {
+            const groupClips = timelineState.tracks
+              .flatMap(t => t.clips)
+              .filter(clip => group.clipIds.includes(clip.id));
+            
+            if (groupClips.length === 0) return null;
+            
+            const isGroupSelected = group.clipIds.every(clipId =>
+              timelineState.selectedClips.includes(clipId)
+            );
 
+            // Calculate group bounds
+            const groupStartTime = Math.min(...groupClips.map(c => c.startTime));
+            const groupEndTime = Math.max(...groupClips.map(c => c.endTime));
+            const groupDuration = groupEndTime - groupStartTime;
+            const groupWidth = timeToPixel(groupDuration);
+            
+            const isBeingDragged = groupClips.some(clip => 
+              dragState.selectedClipIds.includes(clip.id));
+            
+            // Calculate height based on actual track usage
+            const clipHeight = 58;
+            const headerHeight = 28;
+            const clipSpacing = 4;
+            const usedTrackIndices = new Set(
+              groupClips.map(clip => clip.groupTrackIndex ?? groupClips.indexOf(clip))
+            );
+            const maxTrackIndex = Math.max(...Array.from(usedTrackIndices), 0);
+            const numTracksToShow = maxTrackIndex + 2;
+            const totalHeight = headerHeight + ((numTracksToShow - 1) * (clipHeight + clipSpacing)) + clipHeight;
+
+            return (
+              <div 
+                key={`expanded-group-${group.id}`}
+                className="mb-1 relative select-none"
+                style={{ height: `${totalHeight}px` }}
+              >
+                {/* Group Container */}
+                <div
+                  className={`absolute top-0 transition-all duration-200 select-none ${
+                    isBeingDragged ? "opacity-80" : ""
+                  } ${
+                    isGroupSelected ? "ring-2 ring-[#E961FF] ring-opacity-50" : ""
+                  }`}
+                  style={{
+                    left: `${timeToPixel(groupStartTime)}px`,
+                    width: `${groupWidth}px`,
+                    height: `${totalHeight}px`,
+                    zIndex: isGroupSelected ? 15 : 10,
+                  }}
+                  data-group-id={group.id}
+                >
+                  {/* Group Header */}
+                  <div 
+                    className={`h-[${headerHeight}px] relative transition-all duration-200 ${
+                      isGroupSelected ? 'bg-[#2b2b2b]' : 'bg-[#1d1d1d]'
+                    } rounded-lg overflow-hidden mb-1`}
+                  >
+                    {/* Main clickable area for group selection and dragging */}
+                    <div 
+                      className={`absolute inset-0 hover:bg-[#2b2b2b] transition-colors ${
+                        isBeingDragged ? 'cursor-grabbing' : isGroupSelected ? 'cursor-grab' : 'cursor-pointer'
+                      }`}
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                        const isSvg = target.tagName === 'svg' || target.tagName === 'path' || target.closest('svg');
+                        
+                        if (!isButton && !isSvg) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleGroupClick(group.id, e);
+                        }
+                      }}
+                      onMouseDown={(e) => {
+                        const target = e.target as HTMLElement;
+                        const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                        const isSvg = target.tagName === 'svg' || target.tagName === 'path' || target.closest('svg');
+                        
+                        if (isButton || isSvg) return;
+                        
+                        if (isGroupSelected) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleGroupMouseDown(group.id, e, "move");
+                        }
+                      }}
+                      title={isGroupSelected ? "Drag to move group" : "Click to select entire group"}
+                    />
+                    
+                    <div className="flex items-center gap-2 px-2 py-1 h-full relative z-10">
+                      {/* Collapse button */}
+                      <button
+                        className="w-4 h-4 flex items-center justify-center shrink-0 hover:bg-white/10 rounded relative z-20"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCollapseGroup(group.id);
+                        }}
+                        title="Collapse group"
+                      >
+                        <svg className="w-3 h-3 text-[#FAFAFA]" viewBox="0 0 16 16" fill="none">
+                          <path
+                            d="M4 6l4 4 4-4"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                      
+                      {/* Group icon */}
+                      <div className="w-4 h-4 flex items-center justify-center shrink-0 pointer-events-none">
+                        <svg className="w-3 h-3 text-[#BBBBBB]" viewBox="0 0 16 16" fill="none">
+                          <path
+                            d="M3 4h10M3 8h10M3 12h10"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      </div>
+                      
+                      {/* Group name */}
+                      <div className="flex-1 min-w-0 pointer-events-none">
+                        <p className="text-[#bbbbbb] text-[11px] font-semibold leading-[16px] truncate">
+                          {group.name}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Border overlay */}
+                    <div className="absolute inset-0 border border-[rgba(250,250,250,0.15)] rounded-lg pointer-events-none" />
+                  </div>
+
+                  {/* Track Lanes - visual guides */}
+                  {Array.from({ length: numTracksToShow }, (_, i) => i).map((trackIndex) => (
+                    <div
+                      key={`track-lane-${trackIndex}`}
+                      className="absolute border border-[rgba(250,250,250,0.05)] hover:border-[rgba(250,250,250,0.1)] transition-colors rounded"
+                      style={{
+                        top: `${headerHeight + (trackIndex * (clipHeight + clipSpacing))}px`,
+                        left: '0px',
+                        right: '0px',
+                        height: `${clipHeight}px`,
+                        zIndex: 1,
+                      }}
+                      data-track-index={trackIndex}
+                    />
+                  ))}
+
+                  {/* Individual clips */}
+                  {groupClips.map((clip) => {
+                    const trackIndex = clip.groupTrackIndex ?? groupClips.indexOf(clip);
+                    const clipTop = headerHeight + (trackIndex * (clipHeight + clipSpacing));
+                    const relativeLeft = timeToPixel(clip.startTime - groupStartTime);
+                    
+                    return (
+                      <div
+                        key={clip.id}
+                        className="absolute"
+                        style={{
+                          top: `${clipTop}px`,
+                          left: `${relativeLeft}px`,
+                          width: `${timeToPixel(clip.duration)}px`,
+                          height: `${clipHeight}px`,
+                          zIndex: clip.selected ? 15 : 10,
+                        }}
+                      >
+                        <TimelineClipComponent
+                          id={clip.id}
+                          fileName={clip.trackName || clip.name}
+                          duration={clip.duration}
+                          startTime={clip.startTime}
+                          width={timeToPixel(clip.duration)}
+                          selected={clip.selected}
+                          waveformData={clip.waveformData}
+                          waveformColor={clip.waveformColor}
+                          onClipSelect={(clipId: string, event: React.MouseEvent) => handleClipClick(clipId, event)}
+                          onRangeSelect={handleRangeSelect}
+                          onClipSplit={(clipId: string, splitPoint: number) => {
+                            const splitDuration = 0.1;
+                            const startOffset = Math.max(0, splitPoint - clip.startTime - splitDuration / 2);
+                            const endOffset = Math.min(clip.duration, splitPoint - clip.startTime + splitDuration / 2);
+                            handleRangeSplit(clipId, startOffset, endOffset);
+                          }}
+                          onClipDelete={(clipId: string) => {
+                            handleRangeDelete(clipId, 0, clip.duration);
+                          }}
+                          onClipMouseDown={(e: React.MouseEvent) => handleClipMouseDown(clip.id, e, "move")}
+                        />
+                        
+                        {/* Trim handles for individual clips */}
+                        {clip.selected && !dragState.isDragging && (
+                          <>
+                            <div
+                              className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-30 pointer-events-auto bg-[#E961FF] opacity-0 hover:opacity-75 transition-opacity border-r border-white/20"
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                handleClipMouseDown(clip.id, e, "trim-start");
+                              }}
+                              title="Drag to trim from start"
+                            />
+                            <div
+                              className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize z-30 pointer-events-auto bg-[#E961FF] opacity-0 hover:opacity-75 transition-opacity border-l border-white/20"
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                handleClipMouseDown(clip.id, e, "trim-end");
+                              }}
+                              title="Drag to trim from end"
+                            />
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* Group trim handles */}
+                  {isGroupSelected && (
+                    <>
+                      <div 
+                        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#E961FF] opacity-0 hover:opacity-50 transition-opacity z-20"
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                          handleGroupMouseDown(group.id, e, "trim-start");
+                        }}
+                      />
+                      <div 
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#E961FF] opacity-0 hover:opacity-50 transition-opacity z-20"
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                          handleGroupMouseDown(group.id, e, "trim-end");
+                        }}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
 
           {/* Then, render tracks with embedded collapsed groups */}
           {timelineState.tracks.map((track, trackIndex) => {
@@ -6109,11 +6349,18 @@ export default function InteractiveTrackEditor({
               });
             }
 
+            // Filter clips to exclude those in expanded groups
+            const trackClips = track.clips.filter(clip => {
+              if (!clip.groupId) return true; // Include ungrouped clips
+              const group = timelineState.groups.find(g => g.id === clip.groupId);
+              return !group || group.collapsed; // Include clips from collapsed groups or if no group found
+            });
+
             return (
               <TrackRow
                 key={track.id}
                 track={track}
-                clips={track.clips}
+                clips={trackClips}
                 onClipClick={handleClipClick}
                 onClipMouseDown={handleClipMouseDown}
                 timeToPixel={timeToPixel}
