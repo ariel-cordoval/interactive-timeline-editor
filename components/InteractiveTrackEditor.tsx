@@ -3662,6 +3662,7 @@ export default function InteractiveTrackEditor({
           waveformColor: clip.waveformColor,
           sourceStartOffset: clip.sourceStartOffset,
         };
+        console.log(`   📎 Before clip: ${beforeClip.id}, ${beforeClip.startTime.toFixed(2)}s - ${beforeClip.endTime.toFixed(2)}s (${beforeClip.duration.toFixed(2)}s)`);
         newClips.push(beforeClip);
         
         newAudioSegments.push({
@@ -3691,6 +3692,7 @@ export default function InteractiveTrackEditor({
           waveformColor: clip.waveformColor,
           sourceStartOffset: clip.sourceStartOffset + endOffset,
         };
+        console.log(`   📎 After clip: ${afterClip.id}, ${afterClip.startTime.toFixed(2)}s - ${afterClip.endTime.toFixed(2)}s (${afterClip.duration.toFixed(2)}s)`);
         newClips.push(afterClip);
         
         newAudioSegments.push({
@@ -3854,12 +3856,18 @@ export default function InteractiveTrackEditor({
     // Use the helper function for individual clip range deletion
     const { newClips, newAudioSegments, originalClip } = deleteRangeFromClip(clip, startOffset, endOffset);
 
+    console.log(`🔄 Individual clip replacement: ${originalClip.id} → ${newClips.length} new clips`);
+    newClips.forEach((newClip, index) => {
+      console.log(`   ${index + 1}. ${newClip.id}: ${newClip.startTime.toFixed(2)}s - ${newClip.endTime.toFixed(2)}s (${newClip.duration.toFixed(2)}s)`);
+    });
+
     // Update timeline state with new clips
     setTimelineState((prev) => {
       const updatedTracks = prev.tracks.map((track) => ({
         ...track,
         clips: track.clips.flatMap((c) => {
           if (c.id !== originalClip.id) return c;
+          console.log(`🔄 Replacing individual clip ${c.id} with ${newClips.length} clips`);
           return newClips;
         }),
       }));
