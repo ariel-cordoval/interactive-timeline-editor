@@ -3787,23 +3787,22 @@ export default function InteractiveTrackEditor({
         });
         
         setTimelineState((prev) => {
-          const processedClipIds = new Set<string>();
+          // Create a map of original clip IDs to their new clips to prevent duplicates
+          const clipReplacements = new Map<string, TimelineClip[]>();
+          allChanges.forEach(change => {
+            clipReplacements.set(change.originalClip.id, change.newClips);
+          });
+          
           const updatedTracks = prev.tracks.map((track) => ({
             ...track,
             clips: track.clips.flatMap((c) => {
               // Check if this clip was modified
-              const change = allChanges.find(ch => ch.originalClip.id === c.id);
-              if (change) {
-                // Prevent duplicate processing
-                if (processedClipIds.has(c.id)) {
-                  console.log(`   ⚠️ Skipping duplicate processing of clip ${c.id}`);
-                  return []; // Return empty array to remove duplicate
-                }
-                processedClipIds.add(c.id);
-                
-                // Replace with new clips
-                console.log(`   🔄 Replacing clip ${c.id} with ${change.newClips.length} new clips`);
-                return change.newClips;
+              if (clipReplacements.has(c.id)) {
+                const newClips = clipReplacements.get(c.id)!;
+                console.log(`   🔄 Replacing clip ${c.id} with ${newClips.length} new clips`);
+                // Remove from map to prevent duplicate replacements
+                clipReplacements.delete(c.id);
+                return newClips;
               }
               return c;
             }),
