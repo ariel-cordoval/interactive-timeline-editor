@@ -3624,6 +3624,8 @@ export default function InteractiveTrackEditor({
   // Helper function for individual clip range deletion
   const deleteRangeFromClip = useCallback((clip: TimelineClip, startOffset: number, endOffset: number) => {
     console.log(`   📋 Individual clip range delete: ${clip.name}`);
+    console.log(`   🎯 Clip details: startTime=${clip.startTime.toFixed(2)}s, duration=${clip.duration.toFixed(2)}s, endTime=${clip.endTime.toFixed(2)}s`);
+    console.log(`   ✂️ Range to delete: ${startOffset.toFixed(2)}s - ${endOffset.toFixed(2)}s (within clip)`);
 
     // Find the corresponding audio track data
     const audioTrack = audioTracks.find(track => 
@@ -3632,6 +3634,11 @@ export default function InteractiveTrackEditor({
 
     const newClips: TimelineClip[] = [];
     const newAudioSegments: AudioTrackSegment[] = [];
+    
+    // Check if this range deletion will create any remaining parts
+    const willCreateBeforePart = startOffset > 0;
+    const willCreateAfterPart = endOffset < clip.duration;
+    console.log(`   🔍 Will create parts: before=${willCreateBeforePart}, after=${willCreateAfterPart}`);
 
     // Create new clips and audio segments
     if (audioTrack && audioTrack.channelData) {
@@ -3695,6 +3702,7 @@ export default function InteractiveTrackEditor({
       }
     }
 
+    console.log(`   ✅ Created ${newClips.length} new clips from range deletion of ${clip.name}`);
     return { newClips, newAudioSegments, originalClip: clip };
   }, [audioTracks, generateWaveformFromAudio]);
 
@@ -3749,22 +3757,35 @@ export default function InteractiveTrackEditor({
       
       // Delete range from each clip in the group that intersects with the selected range
       groupClips.forEach(clip => {
+        console.log(`   📋 Checking clip ${clip.name}: ${clip.startTime.toFixed(2)}s - ${clip.endTime.toFixed(2)}s (duration: ${clip.duration.toFixed(2)}s)`);
+        
         // Check if this clip intersects with the selected range
-        if (clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime) {
+        const intersects = clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime;
+        console.log(`   🔍 Intersection check: absoluteRange=${absoluteStartTime.toFixed(2)}s-${absoluteEndTime.toFixed(2)}s, intersects=${intersects}`);
+        
+        if (intersects) {
           // Calculate relative offsets within this clip
           const clipRelativeStart = Math.max(0, absoluteStartTime - clip.startTime);
           const clipRelativeEnd = Math.min(clip.duration, absoluteEndTime - clip.startTime);
           
-          console.log(`   🗑️ Deleting from clip ${clip.name}: ${clipRelativeStart.toFixed(2)}s - ${clipRelativeEnd.toFixed(2)}s`);
+          console.log(`   🗑️ Deleting from clip ${clip.name}: ${clipRelativeStart.toFixed(2)}s - ${clipRelativeEnd.toFixed(2)}s (relative to clip start)`);
+          console.log(`   💡 This means: keeping ${clipRelativeStart.toFixed(2)}s before + ${(clip.duration - clipRelativeEnd).toFixed(2)}s after`);
           
           // Use the helper function instead of recursive call
           const changes = deleteRangeFromClip(clip, clipRelativeStart, clipRelativeEnd);
           allChanges.push(changes);
+        } else {
+          console.log(`   ⏭️ Skipping clip ${clip.name} (no intersection)`);
         }
       });
       
       // Apply all changes at once
       if (allChanges.length > 0) {
+        console.log(`   🔄 Applying ${allChanges.length} clip changes:`);
+        allChanges.forEach((change, index) => {
+          console.log(`   ${index + 1}. ${change.originalClip.name}: ${change.newClips.length} new clips`);
+        });
+        
         setTimelineState((prev) => {
           const updatedTracks = prev.tracks.map((track) => ({
             ...track,
@@ -3773,6 +3794,7 @@ export default function InteractiveTrackEditor({
               const change = allChanges.find(ch => ch.originalClip.id === c.id);
               if (change) {
                 // Replace with new clips
+                console.log(`   🔄 Replacing clip ${c.id} with ${change.newClips.length} new clips`);
                 return change.newClips;
               }
               return c;
