@@ -193,32 +193,14 @@ function GroupTrackRow({
     }
   }, [selected, clearSelection]);
 
-  // Handle keyboard shortcuts for collapsed groups
+  // Handle keyboard shortcuts for collapsed groups - DISABLED to prevent conflicts
+  // The main keyboard handler will handle all keyboard events
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle Escape to clear local selection - all other keys handled by main handler
       if (!selected || !group.collapsed) return;
       
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        e.preventDefault();
-        if (selectionStart !== null && selectionEnd !== null) {
-          // If there's a range selection, delete the selected range
-          const start = Math.min(selectionStart, selectionEnd);
-          const end = Math.max(selectionStart, selectionEnd);
-          console.log(`🗑️ Delete selected range in group: ${start.toFixed(2)}s - ${end.toFixed(2)}s`);
-          onRangeDelete(group.id, start, end);
-          clearSelection();
-        }
-        // If no range selection, let the main delete handler handle group deletion
-      } else if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        if (selectionStart !== null && selectionEnd !== null) {
-          // Split at middle of range selection
-          const splitPoint = (selectionStart + selectionEnd) / 2;
-          console.log(`✂️ Split group at range selection: ${splitPoint.toFixed(2)}s`);
-          onRangeSplit(group.id, splitPoint, splitPoint);
-        }
-        // If no range selection, let the main split handler handle playhead split
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         e.preventDefault();
         // Clear range selection on Escape
         console.log('🔄 Clear group range selection');
@@ -230,7 +212,7 @@ function GroupTrackRow({
       document.addEventListener('keydown', handleKeyDown);
       return () => document.removeEventListener('keydown', handleKeyDown);
     }
-  }, [selected, group.collapsed, group.id, group.name, selectionStart, selectionEnd, groupDuration, onRangeDelete, onRangeSplit, clearSelection]);
+  }, [selected, group.collapsed, clearSelection]);
 
   // Generate consistent colors for speakers
   const getSpeakerColor = (clipName: string, clipColor?: string) => {
@@ -3724,6 +3706,8 @@ export default function InteractiveTrackEditor({
     const allClips = timelineState.tracks.flatMap((track) => track.clips);
     const group = timelineState.groups.find((g) => g.id === clipOrGroupId);
     
+    console.log(`🔍 Range delete analysis: isGroup=${!!group}, groupName=${group?.name}, numClipsInSystem=${allClips.length}`);
+    
     if (group) {
       // This is a group - delete range from all clips in the group within the selected range
       console.log(`   📋 Group range delete: ${group.name} (${group.clipIds.length} clips)`);
@@ -5684,10 +5668,12 @@ export default function InteractiveTrackEditor({
 
   // Handle range selection for split/delete operations
   const handleRangeSelect = useCallback((clipId: string, startOffset: number, endOffset: number) => {
+    console.log(`🎯 Range selection set: clipId=${clipId}, range=${startOffset.toFixed(2)}s-${endOffset.toFixed(2)}s`);
     setRangeSelection({ clipId, startOffset, endOffset });
     
     // Check if this is a group range selection
     const group = timelineState.groups.find(g => g.id === clipId);
+    console.log(`🔍 Is group range selection: ${!!group}, group:`, group?.name);
     
     if (group) {
       // For group range selections, keep the group selected
@@ -5737,11 +5723,14 @@ export default function InteractiveTrackEditor({
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault();
         if (rangeSelection) {
-  
+          console.log(`⌨️ Keyboard DELETE with range selection:`, rangeSelection);
           handleRangeDelete(rangeSelection.clipId, rangeSelection.startOffset, rangeSelection.endOffset);
           setRangeSelection(null);
         } else if (timelineState.selectedClips.length > 0) {
+          console.log(`⌨️ Keyboard DELETE with selected clips:`, timelineState.selectedClips);
           handleDelete();
+        } else {
+          console.log(`⌨️ Keyboard DELETE with no selection`);
         }
       } else if ((event.key === 's' || event.key === 'S') && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
