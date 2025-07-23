@@ -3787,12 +3787,20 @@ export default function InteractiveTrackEditor({
         });
         
         setTimelineState((prev) => {
+          const processedClipIds = new Set<string>();
           const updatedTracks = prev.tracks.map((track) => ({
             ...track,
             clips: track.clips.flatMap((c) => {
               // Check if this clip was modified
               const change = allChanges.find(ch => ch.originalClip.id === c.id);
               if (change) {
+                // Prevent duplicate processing
+                if (processedClipIds.has(c.id)) {
+                  console.log(`   ⚠️ Skipping duplicate processing of clip ${c.id}`);
+                  return []; // Return empty array to remove duplicate
+                }
+                processedClipIds.add(c.id);
+                
                 // Replace with new clips
                 console.log(`   🔄 Replacing clip ${c.id} with ${change.newClips.length} new clips`);
                 return change.newClips;
