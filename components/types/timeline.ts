@@ -15,6 +15,8 @@ export interface TimelineClip {
   sourceStartOffset: number;
   groupId?: string;
   groupTrackIndex?: number;
+  originalWidth?: number;
+  trackName?: string;
 }
 
 export interface TimelineTrack {
@@ -75,13 +77,51 @@ export interface RangeSelection {
 }
 
 export interface AudioTrackSegment {
-  id: string;
+  clipId: string;
   startTime: number;
-  endTime: number;
+  duration: number;
   audioData: Float32Array;
-  volume: number;
 }
 
 export interface InteractiveTrackEditorProps {
   onTimelineChange?: (state: TimelineState) => void;
-} 
+}
+
+// Mouse down state for click vs drag detection
+export interface MouseDownState {
+  isMouseDown: boolean;
+  startX: number;
+  startY: number;
+  startTime: number;
+  clipId: string | null;
+  dragType: "move" | "trim-start" | "trim-end" | null;
+}
+
+// Audio track for playback management
+export interface AudioTrack {
+  id: string;
+  name: string;
+  file: { name: string };
+  audioBuffer: AudioBuffer;
+  audioContext: AudioContext;
+  duration: number;
+  sampleRate: number;
+  channelData: Float32Array;
+  segments: {
+    clipId: string;
+    startTime: number;
+    endTime: number;
+    sourceOffset: number;
+  }[];
+}
+
+// Clipboard data for copy/paste operations
+export interface ClipboardData {
+  clipId: string;
+  startOffset: number;
+  endOffset: number;
+  audioData?: Float32Array;
+  waveformData?: Float32Array;
+  duration: number;
+  originalClip: TimelineClip;
+}

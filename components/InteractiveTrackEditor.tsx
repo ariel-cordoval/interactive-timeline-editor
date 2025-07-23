@@ -4,101 +4,20 @@ import React, {
   useCallback,
   useEffect,
 } from "react";
-// import Track from "../imports/Track";
-// import TrackSelected from "../imports/Track-2-4144";
 import GroupButton from "../imports/Split-3-4833";
-import TimelineClip from "./TimelineClip";
+import TimelineClipComponent from "./TimelineClip";
 import { useSmoothZoom } from "./hooks/useSmoothZoom";
-// AudioManager removed - integrated functionality directly into timeline
-
-// Enhanced timeline state types
-interface TimelineClip {
-  id: string;
-  trackId: string;
-  startTime: number;
-  endTime: number;
-  duration: number;
-  type: "audio" | "video";
-  name: string;
-  color: string;
-  selected: boolean;
-  originalWidth?: number;
-  trackName?: string;
-  groupId?: string; // Add group ID for track grouping
-  groupTrackIndex?: number; // Position within the group (0, 1, 2, etc.)
-  waveformData: Float32Array;
-  waveformColor: string;
-  sourceStartOffset: number; // Where in the original audio file this clip starts (in seconds)
-}
-
-interface TimelineGroup {
-  id: string;
-  name: string;
-  clipIds: string[];
-  color: string;
-  collapsed: boolean;
-  trackId: string; // Groups now belong to a specific track like clips
-}
-
-interface AudioTrackSegment {
-  clipId: string;
-  startTime: number;
-  duration: number;
-  audioData: Float32Array;
-}
-
-interface TimelineTrack {
-  id: string;
-  name: string;
-  type: "audio" | "video";
-  clips: TimelineClip[];
-  height: number;
-}
-
-interface TimelineState {
-  playheadPosition: number;
-  zoomLevel: number;
-  selectedClips: string[];
-  tracks: TimelineTrack[];
-  groups: TimelineGroup[]; // Add groups to timeline state
-  isPlaying: boolean;
-  totalDuration: number;
-}
-
-interface InteractiveTrackEditorProps {
-  onTimelineChange?: (state: TimelineState) => void;
-}
-
-// Enhanced drag state for vertical movement
-interface DragState {
-  isDragging: boolean;
-  dragType:
-    | "move"
-    | "trim-start"
-    | "trim-end"
-    | "playhead"
-    | null;
-  clipId: string | null;
-  selectedClipIds: string[];
-  startX: number;
-  startY: number;
-  startTime: number;
-  originalClips: TimelineClip[];
-  targetTrackId: string | null;
-  trackOffsets: Map<string, number>; // Track relative positions of clips
-  isValidDrop: boolean;
-  collisionDetected: boolean;
-  dragStarted: boolean;
-  showNewTrackIndicator: boolean; // For visual feedback when dragging below tracks
-}
-
-// Snap state interface
-interface SnapState {
-  isSnapping: boolean;
-  snapPosition: number | null;
-  snapType: "start" | "end" | null;
-  targetClipId: string | null;
-}
+import {
+  TimelineClip,
+  TimelineGroup,
+  TimelineTrack,
+  TimelineState,
+  DragState,
+  SnapState,
+  AudioTrackSegment,
+  InteractiveTrackEditorProps,
+} from "./types/timeline";
+// Audio utilities will be used for file loading and processing
 
 // Group Track Row Component - Handles both collapsed and expanded states
 interface GroupTrackRowProps {
@@ -131,7 +50,7 @@ function GroupTrackRow({
   onClipClick,
   onClipMouseDown,
   timeToPixel,
-  zoomLevel,
+  zoomLevel: _zoomLevel, // Rename to indicate it's intentionally unused for now
   snapState,
   dragState,
   selected,
@@ -823,18 +742,18 @@ function GroupTrackRow({
                   className="relative w-full h-full"
                   title="Click to select this clip • Click group header to select entire group"
                 >
-                  <TimelineClip
+                  <TimelineClipComponent
                     id={clip.id}
-                    fileName={String(clip.trackName || clip.name)}
+                    fileName={clip.trackName || clip.name}
                     duration={clip.duration}
                     startTime={clip.startTime}
                     width={timeToPixel(clip.duration)}
-                    selected={Boolean(clip.selected)}
+                    selected={clip.selected}
                     waveformData={clip.waveformData}
                     waveformColor={clip.waveformColor}
-                    onClipSelect={(clipId, event) => onClipClick(clipId, event)}
+                    onClipSelect={(clipId: string, event: React.MouseEvent) => onClipClick(clipId, event)}
                     onRangeSelect={onRangeSelect}
-                    onClipSplit={(clipId, splitPoint) => {
+                    onClipSplit={(clipId: string, splitPoint: number) => {
                       // Handle split for grouped clips - convert split point to range
                       const splitDuration = 0.1; // Small range around split point
                       const startOffset = Math.max(0, splitPoint - clip.startTime - splitDuration / 2);
@@ -842,12 +761,12 @@ function GroupTrackRow({
                       console.log(`✂️ Split grouped clip ${clipId} at ${splitPoint.toFixed(2)}s (range: ${startOffset.toFixed(2)}-${endOffset.toFixed(2)}s)`);
                       onRangeSplit(clipId, startOffset, endOffset);
                     }}
-                    onClipDelete={(clipId) => {
+                    onClipDelete={(clipId: string) => {
                       // Handle delete for grouped clips - delete entire clip
                       console.log(`🗑️ Delete grouped clip ${clipId}`);
                       onRangeDelete(clipId, 0, clip.duration);
                     }}
-                    onClipMouseDown={(e) => onClipMouseDown(clip.id, e, "move")}
+                    onClipMouseDown={(e: React.MouseEvent) => onClipMouseDown(clip.id, e, "move")}
                   />
                   
                   {/* Trim handles for clips in expanded groups */}
@@ -905,6 +824,9 @@ function GroupTrackRow({
 
 
 
+
+
+
 // Custom Track Component with interactivity
 interface InteractiveTrackProps {
   clip: TimelineClip;
@@ -935,7 +857,7 @@ function InteractiveTrack({
   onClipMouseDown,
   timeToPixel,
   isDragging,
-  zoomLevel,
+  zoomLevel: _zoomLevel, // Rename to indicate it's intentionally unused for now
   snapState,
   dragState,
   isGrouped,
@@ -949,12 +871,6 @@ function InteractiveTrack({
   const isBeingDragged = dragState.selectedClipIds.includes(
     clip.id,
   );
-
-  // Handle clip drag from our TimelineClip component
-  // const handleClipDrag = useCallback((clipId: string, newPosition: number) => {
-  //   // This is no longer needed - TimelineClip will use onClipMouseDown instead
-  //   console.log('Drag handling delegated to main timeline system');
-  // }, []);
 
   // Handle clip selection
   const handleClipSelect = useCallback((clipId: string, event: React.MouseEvent) => {
@@ -1007,21 +923,21 @@ function InteractiveTrack({
       data-clip-id={clip.id}
     >
       {/* Use our new TimelineClip component */}
-             <TimelineClip
-         id={clip.id}
-         fileName={String(clip.trackName || clip.name)}
-         duration={clip.duration}
-         startTime={clip.startTime}
-         width={timeToPixel(clip.duration)}
-         selected={Boolean(clip.selected)}
-         waveformData={clip.waveformData}
-         waveformColor={clip.waveformColor}
-         onClipSelect={handleClipSelect}
-         onRangeSelect={handleRangeSelect}
-         onClipSplit={handleClipSplit}
-         onClipDelete={handleClipDelete}
-         onClipMouseDown={(e) => onClipMouseDown(clip.id, e, "move")}
-       />
+      <TimelineClipComponent
+        id={clip.id}
+        fileName={clip.trackName || clip.name}
+        duration={clip.duration}
+        startTime={clip.startTime}
+        width={timeToPixel(clip.duration)}
+        selected={clip.selected}
+        waveformData={clip.waveformData}
+        waveformColor={clip.waveformColor}
+        onClipSelect={handleClipSelect}
+        onRangeSelect={handleRangeSelect}
+        onClipSplit={handleClipSplit}
+        onClipDelete={handleClipDelete}
+        onClipMouseDown={(e: React.MouseEvent) => onClipMouseDown(clip.id, e, "move")}
+      />
 
       {/* Group Indicator */}
       {isGrouped && (
@@ -1030,7 +946,7 @@ function InteractiveTrack({
         </div>
       )}
 
-              {/* Interactive Overlay for trim functionality */}
+      {/* Interactive Overlay for trim functionality */}
       <div className="absolute inset-0 pointer-events-none">
         {/* Trim Areas - visible on selected clips */}
         {clip.selected && !dragState.isDragging && (
@@ -1056,13 +972,11 @@ function InteractiveTrack({
           </>
         )}
       </div>
-
-
     </div>
   );
 }
 
-// Enhanced Track Row Component with drop zone
+// Enhanced Track Row Component with drop zone - NO GROUP RENDERING (groups handled by GroupTrackRow)
 interface TrackRowProps {
   track: TimelineTrack;
   clips: TimelineClip[];
@@ -1119,8 +1033,8 @@ function TrackRow({
     // determine if deselection should happen based on what was clicked
   }, []);
 
-  // Find collapsed groups that belong to this track (expanded groups are rendered separately)
-  const trackGroups = groups.filter(group => group.trackId === track.id && group.collapsed);
+  // Find ALL groups that belong to this track (both collapsed and expanded)
+  const trackGroups = groups.filter(group => group.trackId === track.id);
 
   return (
     <div
@@ -1131,72 +1045,49 @@ function TrackRow({
       }`}
       onClick={handleTrackClick}
     >
-      {/* Render collapsed groups first */}
+      {/* Render all groups (collapsed and expanded) inline using GroupTrackRow component */}
       {trackGroups.map((group) => {
-        // Get all clips in this group
-        const groupClips = clips.filter(clip => clip.groupId === group.id);
+        // Get all clips in this group using the authoritative clipIds
+        const groupClips = clips.filter(clip => group.clipIds.includes(clip.id));
         if (groupClips.length === 0) return null;
-        
-        // Calculate group bounds
-        const groupStartTime = Math.min(...groupClips.map(c => c.startTime));
-        const groupEndTime = Math.max(...groupClips.map(c => c.endTime));
-        const groupDuration = groupEndTime - groupStartTime;
-        const groupWidth = timeToPixel(groupDuration);
         
         // Check if group is selected
         const isGroupSelected = group.clipIds.every(clipId =>
           clips.some(clip => clip.id === clipId && clip.selected)
         );
 
-        const isSnappingToThis = snapState.isSnapping && 
-          groupClips.some(clip => snapState.targetClipId === clip.id);
-        const isBeingDragged = groupClips.some(clip => 
-          dragState.selectedClipIds.includes(clip.id));
-
         return (
-          <div
+          <GroupTrackRow
             key={`group-${group.id}`}
-            className={`absolute top-0 h-full transition-all duration-200 select-none ${
-              isBeingDragged ? "opacity-80" : ""
-            } ${isSnappingToThis ? "ring-2 ring-purple-400" : ""}`}
-            style={{
-              left: `${timeToPixel(groupStartTime)}px`,
-              width: `${groupWidth}px`,
-              zIndex: isGroupSelected ? 15 : 10,
-            }}
-            data-group-id={group.id}
-          >
-            <GroupTrackRow
-              group={group}
-              clips={groupClips}
-              onGroupClick={onGroupClick}
-              onGroupMouseDown={onGroupMouseDown}
-              onExpandGroup={onExpandGroup}
-              onCollapseGroup={onCollapseGroup}
-              onClipClick={onClipClick}
-              onClipMouseDown={onClipMouseDown}
-              timeToPixel={timeToPixel}
-              zoomLevel={zoomLevel}
-              snapState={snapState}
-              dragState={dragState}
-              selected={isGroupSelected}
-              rangeSelection={rangeSelection}
-              onRangeSelect={onRangeSelect}
-              onRangeSplit={onRangeSplit}
-              onRangeDelete={onRangeDelete}
-            />
-          </div>
+            group={group}
+            clips={groupClips}
+            onGroupClick={onGroupClick}
+            onGroupMouseDown={onGroupMouseDown}
+            onExpandGroup={onExpandGroup}
+            onCollapseGroup={onCollapseGroup}
+            onClipClick={onClipClick}
+            onClipMouseDown={onClipMouseDown}
+            timeToPixel={timeToPixel}
+            zoomLevel={zoomLevel}
+            snapState={snapState}
+            dragState={dragState}
+            selected={isGroupSelected}
+            rangeSelection={rangeSelection}
+            onRangeSelect={onRangeSelect}
+            onRangeSplit={onRangeSplit}
+            onRangeDelete={onRangeDelete}
+          />
         );
       })}
 
-      {/* Render individual clips that aren't in collapsed groups */}
+      {/* Render individual clips that aren't in any groups */}
       {clips.map((clip) => {
         const group = clip.groupId ? groups.find((g) => g.id === clip.groupId) : null;
         const isGrouped = Boolean(group);
         
-        // If this clip belongs to a collapsed group, skip rendering individual clip
-        // (the group will be rendered above)
-        if (group && group.collapsed) {
+        // If this clip belongs to any group (collapsed or expanded), skip rendering individual clip
+        // (the group will be rendered above by GroupTrackRow component)
+        if (group) {
           return null;
         }
         
@@ -2023,7 +1914,6 @@ export default function InteractiveTrackEditor({
         event.preventDefault();
         
         const timelineWidth = 1262;
-        const visibleDuration = timelineState.totalDuration / smoothZoom.zoomLevel;
         const totalWidth = timelineWidth * smoothZoom.zoomLevel;
         const maxOffset = Math.max(0, totalWidth - timelineWidth);
         
@@ -2165,7 +2055,7 @@ export default function InteractiveTrackEditor({
       expandedGroups.forEach(group => {
         const groupClips = timelineState.tracks
           .flatMap(t => t.clips)
-          .filter(clip => clip.groupId === group.id);
+          .filter(clip => group.clipIds.includes(clip.id));
         
         if (groupClips.length > 0) {
           const clipHeight = 58;
@@ -3073,7 +2963,15 @@ export default function InteractiveTrackEditor({
 
             // This clip is in a collapsed group - handle group split
             if (splitTime <= clip.startTime || splitTime >= clip.endTime) {
-              return clip;
+              // Clip doesn't need splitting, but assign it to the correct new group
+              const timestamp = groupTimestamps.get(group.id)!;
+              const firstGroupId = `${group.id}-first-${timestamp}`;
+              const secondGroupId = `${group.id}-second-${timestamp}`;
+              
+              return {
+                ...clip,
+                groupId: splitTime <= clip.startTime ? secondGroupId : firstGroupId
+              };
             }
 
             // Use shared timestamp for all clips in the same group
@@ -6175,55 +6073,12 @@ export default function InteractiveTrackEditor({
         onClick={handleBackgroundClick}
       >
         <div className="pl-[40px] pr-4 py-2">
-          {/* First, render expanded groups separately (they need more height) */}
-          {timelineState.groups.filter(group => !group.collapsed).map(group => {
-            // Get all clips in this group
-            const groupClips = timelineState.tracks
-              .flatMap(t => t.clips)
-              .filter(clip => clip.groupId === group.id);
-            
-            if (groupClips.length === 0) return null;
-            
-            // Check if group is selected
-            const isGroupSelected = group.clipIds.every(clipId =>
-              timelineState.selectedClips.includes(clipId)
-            );
 
-            return (
-              <GroupTrackRow
-                key={`expanded-group-${group.id}`}
-                group={group}
-                clips={groupClips}
-                onGroupClick={handleGroupClick}
-                onGroupMouseDown={handleGroupMouseDown}
-                onExpandGroup={handleExpandGroup}
-                onCollapseGroup={handleCollapseGroup}
-                onClipClick={handleClipClick}
-                onClipMouseDown={handleClipMouseDown}
-                timeToPixel={timeToPixel}
-                zoomLevel={timelineState.zoomLevel}
-                snapState={snapState}
-                dragState={dragState}
-                selected={isGroupSelected}
-                rangeSelection={rangeSelection}
-                onRangeSelect={handleRangeSelect}
-                onRangeSplit={handleRangeSplit}
-                onRangeDelete={handleRangeDelete}
-              />
-            );
-          })}
 
           {/* Then, render tracks with embedded collapsed groups */}
           {timelineState.tracks.map((track, trackIndex) => {
-            // Get clips for this track, excluding clips that belong to expanded groups
-            const trackClips = track.clips.filter(clip => {
-              if (!clip.groupId) return true; // Include ungrouped clips
-              const group = timelineState.groups.find(g => g.id === clip.groupId);
-              return group && group.collapsed; // Only include clips from collapsed groups
-            });
-
-            // Skip rendering if no clips in this track (after filtering out expanded group clips)
-            if (trackClips.length === 0) return null;
+            // Skip rendering if no clips in this track
+            if (track.clips.length === 0) return null;
 
             // Check if this track is a drop target for any of the dragged clips
             let isDropTarget = false;
@@ -6258,7 +6113,7 @@ export default function InteractiveTrackEditor({
               <TrackRow
                 key={track.id}
                 track={track}
-                clips={trackClips}
+                clips={track.clips}
                 onClipClick={handleClipClick}
                 onClipMouseDown={handleClipMouseDown}
                 timeToPixel={timeToPixel}

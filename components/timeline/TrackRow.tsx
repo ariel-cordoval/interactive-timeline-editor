@@ -101,7 +101,7 @@ const TrackRow: React.FC<TrackRowProps> = ({
   };
 
   const renderCollapsedGroup = (group: TimelineGroup) => {
-    const groupClips = clips.filter(clip => clip.groupId === group.id);
+    const groupClips = clips.filter(clip => group.clipIds.includes(clip.id));
     if (groupClips.length === 0) return null;
 
     const startTime = Math.min(...groupClips.map(clip => clip.startTime));

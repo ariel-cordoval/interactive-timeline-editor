@@ -37,13 +37,14 @@ const GroupTrackRow: React.FC<GroupTrackRowProps> = ({
   selected,
   rangeSelection: _rangeSelection, // Renamed to indicate intentionally unused
 }) => {
-  // Calculate group bounds
-  const groupStartTime = Math.min(...clips.map(c => c.startTime));
-  const groupEndTime = Math.max(...clips.map(c => c.endTime));
+  // Calculate group bounds using authoritative clipIds
+  const groupClips = clips.filter(clip => group.clipIds.includes(clip.id));
+  const groupStartTime = Math.min(...groupClips.map(c => c.startTime));
+  const groupEndTime = Math.max(...groupClips.map(c => c.endTime));
   const groupDuration = groupEndTime - groupStartTime;
   const groupWidth = timeToPixel(groupDuration);
   
-  const isBeingDragged = clips.some(clip => 
+  const isBeingDragged = groupClips.some(clip => 
     dragState.selectedClipIds.includes(clip.id));
 
   // Generate consistent colors for speakers
