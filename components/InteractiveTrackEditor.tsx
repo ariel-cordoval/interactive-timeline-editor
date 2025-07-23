@@ -1308,10 +1308,10 @@ function InteractiveControls({
     }
   };
 
-  // Handle delete - use range delete if available
+  // Handle delete - use range delete if available  
   const handleDeleteClick = () => {
     if (rangeSelection) {
-      console.log(`🗑️ Range delete: ${rangeSelection.clipId} from ${rangeSelection.startOffset.toFixed(2)}s to ${rangeSelection.endOffset.toFixed(2)}s`);
+      console.log(`🗑️ Button range delete: ${rangeSelection.clipId} from ${rangeSelection.startOffset.toFixed(2)}s to ${rangeSelection.endOffset.toFixed(2)}s`);
       onRangeDelete(rangeSelection.clipId, rangeSelection.startOffset, rangeSelection.endOffset);
       onClearRangeSelection(); // Clear the range selection after delete
     } else {
@@ -3698,9 +3698,27 @@ export default function InteractiveTrackEditor({
     return { newClips, newAudioSegments, originalClip: clip };
   }, [audioTracks, generateWaveformFromAudio]);
 
+  // Prevent duplicate range delete calls
+  const lastRangeDeleteRef = useRef<{ id: string; start: number; end: number; timestamp: number } | null>(null);
+
   // Handle range-based delete operation with gap preservation
   const handleRangeDelete = useCallback((clipOrGroupId: string, startOffset: number, endOffset: number) => {
     console.log(`🗑️ Range delete: ${clipOrGroupId} from ${startOffset.toFixed(2)}s to ${endOffset.toFixed(2)}s - creating gap`);
+    
+    // Prevent duplicate calls within 100ms
+    const now = Date.now();
+    const current = { id: clipOrGroupId, start: startOffset, end: endOffset, timestamp: now };
+    
+    if (lastRangeDeleteRef.current && 
+        lastRangeDeleteRef.current.id === clipOrGroupId &&
+        lastRangeDeleteRef.current.start === startOffset &&
+        lastRangeDeleteRef.current.end === endOffset &&
+        (now - lastRangeDeleteRef.current.timestamp) < 100) {
+      console.log(`⚠️ Duplicate range delete call detected, skipping`);
+      return;
+    }
+    
+    lastRangeDeleteRef.current = current;
     
     // Check if this is a group ID or clip ID
     const allClips = timelineState.tracks.flatMap((track) => track.clips);
