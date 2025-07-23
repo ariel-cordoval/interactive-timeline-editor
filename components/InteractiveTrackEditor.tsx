@@ -217,10 +217,11 @@ function GroupTrackRow({
       const timeDelta = Date.now() - mouseDownTime;
       
       // If this was a simple click (no movement and quick), select the group
-      if (!hasMoved && timeDelta < 500) {
+      if (!hasMoved && timeDelta < 300) {
         setSelectionStart(null);
         setSelectionEnd(null);
-        onGroupClick(group.id, e as any);
+        // Don't call onGroupClick here since the header click handler should handle it
+        // onGroupClick(group.id, e as any);
       } else if (isRangeSelection && currentSelectionStart !== null && currentSelectionEnd !== null) {
         // This was a horizontal drag for range selection - use local variables instead of React state
         const start = Math.min(currentSelectionStart, currentSelectionEnd);
@@ -242,14 +243,13 @@ function GroupTrackRow({
           // Clear selection if it's too small
           setSelectionStart(null);
           setSelectionEnd(null);
-          // If selection was too small, just select the group
-          onGroupClick(group.id, e as any);
+          // Don't select the group here - let header click handler do it
         }
       } else if (hasMoved && !isRangeSelection) {
-        // This was a vertical drag or other movement - just select the group
+        // This was a vertical drag or other movement - clear selection
         setSelectionStart(null);
         setSelectionEnd(null);
-        onGroupClick(group.id, e as any);
+        // Don't select the group here - let header click handler do it
       } else {
         // Clear any pending selections
         setSelectionStart(null);
@@ -455,7 +455,11 @@ function GroupTrackRow({
               `}
               onClick={(e) => {
                 // Handle group selection on header click
-                if (!(e.target as HTMLElement).closest('button')) {
+                const target = e.target as HTMLElement;
+                const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                const isSvg = target.tagName === 'svg' || target.tagName === 'path' || target.closest('svg');
+                
+                if (!isButton && !isSvg) {
                   e.preventDefault();
                   e.stopPropagation();
                   console.log('👆 Group header clicked - selecting group:', group.id);
@@ -463,8 +467,12 @@ function GroupTrackRow({
                 }
               }}
               onMouseDown={(e) => {
-                // Don't drag if clicking on the expand button
-                if ((e.target as HTMLElement).closest('button')) {
+                // Don't drag if clicking on the expand button or SVG elements
+                const target = e.target as HTMLElement;
+                const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                const isSvg = target.tagName === 'svg' || target.tagName === 'path' || target.closest('svg');
+                
+                if (isButton || isSvg) {
                   return;
                 }
                 
@@ -488,9 +496,14 @@ function GroupTrackRow({
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
+                      console.log('🔽 Expand button clicked for group:', group.id);
                       onExpandGroup(group.id);
                     }}
                     onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onMouseUp={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
                     }}
@@ -678,12 +691,28 @@ function GroupTrackRow({
                 isBeingDragged ? 'cursor-grabbing' : selected ? 'cursor-grab' : 'cursor-pointer'
               }`}
               onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                console.log('👆 Expanded group header clicked - selecting group:', group.id);
-                onGroupClick(group.id, e);
+                // Only handle clicks that aren't on buttons or SVG elements
+                const target = e.target as HTMLElement;
+                const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                const isSvg = target.tagName === 'svg' || target.tagName === 'path' || target.closest('svg');
+                
+                if (!isButton && !isSvg) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log('👆 Expanded group header clicked - selecting group:', group.id);
+                  onGroupClick(group.id, e);
+                }
               }}
               onMouseDown={(e) => {
+                // Don't handle mouse down on buttons or SVG elements
+                const target = e.target as HTMLElement;
+                const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                const isSvg = target.tagName === 'svg' || target.tagName === 'path' || target.closest('svg');
+                
+                if (isButton || isSvg) {
+                  return;
+                }
+                
                 // Only start drag if group is already selected
                 if (selected) {
                   console.log('🖱️ Starting drag for selected expanded group:', group.id);
@@ -1211,7 +1240,7 @@ function SnapIndicator({
 
   return (
     <div
-      className="absolute top-[78px] bottom-0 w-0.5 bg-purple-400 z-30 transition-all duration-150"
+      className="absolute top-[64px] bottom-0 w-0.5 bg-purple-400 z-30 transition-all duration-150"
       style={{
         left: `${40 + timeToPixel(snapState.snapPosition)}px`,
       }}
@@ -2997,6 +3026,13 @@ export default function InteractiveTrackEditor({
       // Handle group splits
       setTimelineState((prev) => {
         const newGroups = [...prev.groups];
+        
+        // Create shared timestamps for each group being split
+        const groupTimestamps = new Map<string, number>();
+        selectedGroups.forEach(group => {
+          groupTimestamps.set(group.id, Date.now() + Math.random() * 1000);
+        });
+        
         const updatedTracks = prev.tracks.map((track) => ({
           ...track,
           clips: track.clips.flatMap((clip) => {
@@ -3040,7 +3076,10 @@ export default function InteractiveTrackEditor({
               return clip;
             }
 
-            const timestamp = Date.now() + Math.random() * 1000; // Ensure unique IDs
+            // Use shared timestamp for all clips in the same group
+            const timestamp = groupTimestamps.get(group.id)!;
+            const firstGroupId = `${group.id}-first-${timestamp}`;
+            const secondGroupId = `${group.id}-second-${timestamp}`;
 
             const firstPart: TimelineClip = {
               ...clip,
@@ -3050,7 +3089,7 @@ export default function InteractiveTrackEditor({
               selected: false,
               waveformData: clip.waveformData,
               waveformColor: clip.waveformColor,
-              groupId: `${group.id}-first-${timestamp}`, // New group for first part
+              groupId: firstGroupId,
             };
 
             const secondPart: TimelineClip = {
@@ -3062,16 +3101,16 @@ export default function InteractiveTrackEditor({
               selected: true, // Select the second part
               waveformData: clip.waveformData,
               waveformColor: clip.waveformColor,
-              groupId: `${group.id}-second-${timestamp}`, // New group for second part
+              groupId: secondGroupId,
             };
 
-            // Create new groups for the split parts
-            const firstGroupExists = newGroups.some(g => g.id === firstPart.groupId);
-            const secondGroupExists = newGroups.some(g => g.id === secondPart.groupId);
+            // Create new groups for the split parts (only once per group)
+            const firstGroupExists = newGroups.some(g => g.id === firstGroupId);
+            const secondGroupExists = newGroups.some(g => g.id === secondGroupId);
 
             if (!firstGroupExists) {
               newGroups.push({
-                id: firstPart.groupId!,
+                id: firstGroupId,
                 name: `${group.name} (1)`,
                 clipIds: [], // Will be populated after all clips are processed
                 collapsed: group.collapsed,
@@ -3082,7 +3121,7 @@ export default function InteractiveTrackEditor({
 
             if (!secondGroupExists) {
               newGroups.push({
-                id: secondPart.groupId!,
+                id: secondGroupId,
                 name: `${group.name} (2)`,
                 clipIds: [], // Will be populated after all clips are processed
                 collapsed: group.collapsed,
@@ -3213,7 +3252,16 @@ export default function InteractiveTrackEditor({
       
       console.log(`   🌍 Absolute range: ${absoluteStartTime.toFixed(2)}s - ${absoluteEndTime.toFixed(2)}s`);
       
-      // Split each clip in the group that intersects with the selected range
+      // Process all clips in the group together to maintain group structure
+      const timestamp = Date.now() + Math.random() * 1000;
+      const beforeGroupId = `${group.id}-before-${timestamp}`;
+      const selectedGroupId = `${group.id}-selected-${timestamp}`;
+      const afterGroupId = `${group.id}-after-${timestamp}`;
+      
+      const newClipsForAllTracks: TimelineClip[] = [];
+      const newAudioSegments: AudioTrackSegment[] = [];
+      
+      // Process each clip in the group
       groupClips.forEach(clip => {
         // Check if this clip intersects with the selected range
         if (clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime) {
@@ -3223,11 +3271,265 @@ export default function InteractiveTrackEditor({
           
           console.log(`   ✂️ Splitting clip ${clip.name}: ${clipRelativeStart.toFixed(2)}s - ${clipRelativeEnd.toFixed(2)}s`);
           
-          // Call range split on this individual clip
-          handleRangeSplit(clip.id, clipRelativeStart, clipRelativeEnd);
+          // Find the corresponding audio track data
+          const audioTrack = audioTracks.find(track => 
+            track.name === clip.name || track.file.name.includes(clip.name)
+          );
+
+          const clipNewClips: TimelineClip[] = [];
+          const clipNewAudioSegments: AudioTrackSegment[] = [];
+
+          // Create new clips and audio segments for this clip
+          if (audioTrack && audioTrack.channelData) {
+            const sampleRate = audioTrack.sampleRate;
+            const originalData = audioTrack.channelData;
+
+            // First segment (before the selected range)
+            if (clipRelativeStart > 0) {
+              const sourceStartSample = Math.floor(clip.sourceStartOffset * sampleRate);
+              const firstSegmentEndSample = sourceStartSample + Math.floor(clipRelativeStart * sampleRate);
+              const firstSegmentData = originalData.slice(sourceStartSample, firstSegmentEndSample);
+              const firstWaveform = generateWaveformFromAudio(firstSegmentData, sampleRate);
+              
+              const beforeClipId = `${clip.id}-before-${timestamp}`;
+              const beforeClip = {
+                ...clip,
+                id: beforeClipId,
+                endTime: clip.startTime + clipRelativeStart,
+                duration: clipRelativeStart,
+                selected: false,
+                waveformData: firstWaveform,
+                waveformColor: clip.waveformColor,
+                sourceStartOffset: clip.sourceStartOffset,
+                groupId: beforeGroupId,
+              };
+              clipNewClips.push(beforeClip);
+              
+              clipNewAudioSegments.push({
+                clipId: beforeClipId,
+                startTime: beforeClip.startTime,
+                duration: beforeClip.duration,
+                audioData: firstSegmentData
+              });
+            }
+
+            // Second segment (the selected range itself)
+            const sourceStartSample = Math.floor(clip.sourceStartOffset * sampleRate);
+            const selectedSegmentStartSample = sourceStartSample + Math.floor(clipRelativeStart * sampleRate);
+            const selectedSegmentEndSample = sourceStartSample + Math.floor(clipRelativeEnd * sampleRate);
+            const selectedSegmentData = originalData.slice(selectedSegmentStartSample, selectedSegmentEndSample);
+            const selectedWaveform = generateWaveformFromAudio(selectedSegmentData, sampleRate);
+            
+            const selectedClipId = `${clip.id}-selected-${timestamp}`;
+            const selectedClip = {
+              ...clip,
+              id: selectedClipId,
+              startTime: clip.startTime + clipRelativeStart,
+              endTime: clip.startTime + clipRelativeEnd,
+              duration: clipRelativeEnd - clipRelativeStart,
+              selected: true,
+              waveformData: selectedWaveform,
+              waveformColor: clip.waveformColor,
+              sourceStartOffset: clip.sourceStartOffset + clipRelativeStart,
+              groupId: selectedGroupId,
+            };
+            clipNewClips.push(selectedClip);
+            
+            clipNewAudioSegments.push({
+              clipId: selectedClipId,
+              startTime: selectedClip.startTime,
+              duration: selectedClip.duration,
+              audioData: selectedSegmentData
+            });
+
+            // Third segment (after the selected range)
+            if (clipRelativeEnd < clip.duration) {
+              const secondSegmentStartSample = sourceStartSample + Math.floor(clipRelativeEnd * sampleRate);
+              const secondSegmentEndSample = sourceStartSample + Math.floor(clip.duration * sampleRate);
+              const secondSegmentData = originalData.slice(secondSegmentStartSample, secondSegmentEndSample);
+              const secondWaveform = generateWaveformFromAudio(secondSegmentData, sampleRate);
+              
+              const afterClipId = `${clip.id}-after-${timestamp}`;
+              const afterClip = {
+                ...clip,
+                id: afterClipId,
+                startTime: clip.startTime + clipRelativeEnd,
+                endTime: clip.endTime,
+                duration: clip.duration - clipRelativeEnd,
+                selected: false,
+                waveformData: secondWaveform,
+                waveformColor: clip.waveformColor,
+                sourceStartOffset: clip.sourceStartOffset + clipRelativeEnd,
+                groupId: afterGroupId,
+              };
+              clipNewClips.push(afterClip);
+              
+              clipNewAudioSegments.push({
+                clipId: afterClipId,
+                startTime: afterClip.startTime,
+                duration: afterClip.duration,
+                audioData: secondSegmentData
+              });
+            }
+          } else {
+            // Fallback for clips without audio data
+            console.log(`   ⚠️ No audio data found for ${clip.name}, creating clips without audio segments`);
+            
+            if (clipRelativeStart > 0) {
+              clipNewClips.push({
+                ...clip,
+                id: `${clip.id}-before-${timestamp}`,
+                endTime: clip.startTime + clipRelativeStart,
+                duration: clipRelativeStart,
+                selected: false,
+                waveformData: clip.waveformData,
+                waveformColor: clip.waveformColor,
+                sourceStartOffset: clip.sourceStartOffset,
+                groupId: beforeGroupId,
+              });
+            }
+
+            clipNewClips.push({
+              ...clip,
+              id: `${clip.id}-selected-${timestamp}`,
+              startTime: clip.startTime + clipRelativeStart,
+              endTime: clip.startTime + clipRelativeEnd,
+              duration: clipRelativeEnd - clipRelativeStart,
+              selected: true,
+              waveformData: clip.waveformData,
+              waveformColor: clip.waveformColor,
+              sourceStartOffset: clip.sourceStartOffset + clipRelativeStart,
+              groupId: selectedGroupId,
+            });
+
+            if (clipRelativeEnd < clip.duration) {
+              clipNewClips.push({
+                ...clip,
+                id: `${clip.id}-after-${timestamp}`,
+                startTime: clip.startTime + clipRelativeEnd,
+                endTime: clip.endTime,
+                duration: clip.duration - clipRelativeEnd,
+                selected: false,
+                waveformData: clip.waveformData,
+                waveformColor: clip.waveformColor,
+                sourceStartOffset: clip.sourceStartOffset + clipRelativeEnd,
+                groupId: afterGroupId,
+              });
+            }
+          }
+          
+          newClipsForAllTracks.push(...clipNewClips);
+          newAudioSegments.push(...clipNewAudioSegments);
+        } else {
+          // Clip doesn't intersect with the range, keep it unchanged but assign to appropriate group
+          const clonedClip = {
+            ...clip,
+            groupId: clip.startTime < absoluteStartTime ? beforeGroupId : 
+                     clip.startTime >= absoluteEndTime ? afterGroupId : selectedGroupId
+          };
+          newClipsForAllTracks.push(clonedClip);
         }
       });
       
+      // Update audio tracks with new segments
+      if (newAudioSegments.length > 0) {
+        setAudioTracks(prev => prev.map(track => {
+          const relatedClips = groupClips.filter(clip => 
+            track.name === clip.name || track.file.name.includes(clip.name)
+          );
+          
+          if (relatedClips.length > 0) {
+            // Remove old segments for clips in this group
+            const filteredSegments = (track.segments || []).filter((seg: AudioTrackSegment) => 
+              !relatedClips.some(clip => seg.clipId === clip.id)
+            );
+            
+            return {
+              ...track,
+              segments: [
+                ...filteredSegments,
+                ...newAudioSegments.filter(seg => relatedClips.some(clip => 
+                  seg.clipId.startsWith(clip.id)
+                ))
+              ]
+            };
+          }
+          return track;
+        }));
+      }
+
+      // Update timeline state with new clips and groups
+      setTimelineState((prev) => {
+        const updatedTracks = prev.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.flatMap((c) => {
+            if (group.clipIds.includes(c.id)) {
+              // Replace clips in the group with new split clips
+              return newClipsForAllTracks.filter(newClip => 
+                newClip.trackId === c.trackId
+              );
+            }
+            return c;
+          }),
+        }));
+
+        // Create new groups for the split parts
+        const newGroups = [...prev.groups.filter(g => g.id !== group.id)];
+        
+        const beforeClips = newClipsForAllTracks.filter(c => c.groupId === beforeGroupId);
+        const selectedClips = newClipsForAllTracks.filter(c => c.groupId === selectedGroupId);
+        const afterClips = newClipsForAllTracks.filter(c => c.groupId === afterGroupId);
+        
+        if (beforeClips.length > 0) {
+          newGroups.push({
+            id: beforeGroupId,
+            name: `${group.name} (Before)`,
+            clipIds: beforeClips.map(c => c.id),
+            collapsed: group.collapsed,
+            color: group.color,
+            trackId: group.trackId,
+          });
+        }
+        
+        if (selectedClips.length > 0) {
+          newGroups.push({
+            id: selectedGroupId,
+            name: `${group.name} (Selected)`,
+            clipIds: selectedClips.map(c => c.id),
+            collapsed: group.collapsed,
+            color: group.color,
+            trackId: group.trackId,
+          });
+        }
+        
+        if (afterClips.length > 0) {
+          newGroups.push({
+            id: afterGroupId,
+            name: `${group.name} (After)`,
+            clipIds: afterClips.map(c => c.id),
+            collapsed: group.collapsed,
+            color: group.color,
+            trackId: group.trackId,
+          });
+        }
+
+        // Recalculate timeline duration
+        const newDuration = calculateTimelineDuration(updatedTracks);
+
+        // Select the clips from the selected group
+        const newSelectedClips = selectedClips.map(c => c.id);
+
+        return {
+          ...prev,
+          tracks: updatedTracks,
+          groups: newGroups,
+          selectedClips: newSelectedClips,
+          totalDuration: newDuration,
+        };
+      });
+      
+      // Clear the range selection after split
+      setRangeSelection(null);
       return;
     }
     
@@ -5317,6 +5619,9 @@ export default function InteractiveTrackEditor({
         
         if (clipMoves.length > 0 || newTracksNeeded.length > 0) {
           setTimelineState((prev) => {
+            // Get all clips from current state for reference
+            const allCurrentClips = prev.tracks.flatMap(t => t.clips);
+            
             // Create new tracks if needed
             let updatedTracks = [
               ...prev.tracks.map((track) => ({
@@ -5330,8 +5635,13 @@ export default function InteractiveTrackEditor({
                   ...clipMoves
                     .filter(move => move.toTrackId === track.id)
                     .map(move => {
-                      const originalClip = track.clips.find(c => c.id === move.clipId);
-                      return originalClip ? { ...originalClip, trackId: move.toTrackId } : null;
+                      // Find the original clip from ALL tracks, not just the current track
+                      const originalClip = allCurrentClips.find(c => c.id === move.clipId);
+                      if (!originalClip) {
+                        console.error(`❌ Could not find clip ${move.clipId} for cascading move`);
+                        return null;
+                      }
+                      return { ...originalClip, trackId: move.toTrackId };
                     })
                     .filter((clip): clip is TimelineClip => clip !== null)
                 ]
@@ -5342,10 +5652,12 @@ export default function InteractiveTrackEditor({
                 clips: clipMoves
                   .filter(move => move.toTrackId === trackId)
                   .map(move => {
-                    const originalClip = prev.tracks
-                      .flatMap(t => t.clips)
-                      .find(c => c.id === move.clipId);
-                    return originalClip ? { ...originalClip, trackId: trackId } : null;
+                    const originalClip = allCurrentClips.find(c => c.id === move.clipId);
+                    if (!originalClip) {
+                      console.error(`❌ Could not find clip ${move.clipId} for new track creation`);
+                      return null;
+                    }
+                    return { ...originalClip, trackId: trackId };
                   })
                   .filter((clip): clip is TimelineClip => clip !== null)
               }))
@@ -5813,7 +6125,7 @@ export default function InteractiveTrackEditor({
 
       {/* Playhead */}
       <div
-        className="absolute top-[28px] bottom-0 w-0.5 bg-white cursor-col-resize z-20"
+        className="absolute top-[64px] bottom-0 w-0.5 bg-white cursor-col-resize z-20"
         style={{
           left: `${40 + timeToPixel(timelineState.playheadPosition)}px`,
         }}
