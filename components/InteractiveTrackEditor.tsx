@@ -5723,17 +5723,16 @@ export default function InteractiveTrackEditor({
     console.log(`🔍 Is group range selection: ${!!group}, group:`, group?.name);
     
     if (group) {
-      // For group range selections, keep the group selected
-      
-      // Ensure the group remains selected
+      // For group range selections, clear all selections to focus on the range
+      console.log(`🎯 Group range selection: clearing clip selections to focus on range`);
       setTimelineState((prev) => ({
         ...prev,
-        selectedClips: group.clipIds, // Keep group clips selected
+        selectedClips: [], // Clear selections when making range selection on group
         tracks: prev.tracks.map((track) => ({
           ...track,
           clips: track.clips.map((clip) => ({
             ...clip,
-            selected: group.clipIds.includes(clip.id), // Keep group clips selected
+            selected: false, // Deselect all clips when making range selection
           })),
         })),
       }));
