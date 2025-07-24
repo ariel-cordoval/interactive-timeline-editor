@@ -736,12 +736,11 @@ function GroupTrackRow({
                     onClipSelect={(clipId: string, event: React.MouseEvent) => onClipClick(clipId, event)}
                     onRangeSelect={onRangeSelect}
                     onClipSplit={(clipId: string, splitPoint: number) => {
-                      // Handle split for grouped clips - convert split point to range
-                      const splitDuration = 0.1; // Small range around split point
-                      const startOffset = Math.max(0, splitPoint - clip.startTime - splitDuration / 2);
-                      const endOffset = Math.min(clip.duration, splitPoint - clip.startTime + splitDuration / 2);
-                      console.log(`✂️ Split grouped clip ${clipId} at ${splitPoint.toFixed(2)}s (range: ${startOffset.toFixed(2)}-${endOffset.toFixed(2)}s)`);
-                      onRangeSplit(clipId, startOffset, endOffset);
+                      // Handle split for grouped clips - use point split, not range split
+                      const relativeOffset = splitPoint - clip.startTime;
+                      console.log(`✂️ Point split grouped clip ${clipId} at ${splitPoint.toFixed(2)}s (offset: ${relativeOffset.toFixed(2)}s)`);
+                      // Use a zero-width range to indicate point split
+                      onRangeSplit(clipId, relativeOffset, relativeOffset);
                     }}
                     onClipDelete={(clipId: string) => {
                       // Handle delete for grouped clips - delete entire clip
@@ -3112,9 +3111,21 @@ export default function InteractiveTrackEditor({
     
     // Check if this is a group ID or clip ID
     const allClips = timelineState.tracks.flatMap((track) => track.clips);
-    const group = timelineState.groups.find((g) => g.id === clipOrGroupId);
+    let group = timelineState.groups.find((g) => g.id === clipOrGroupId);
     
-    if (group) {
+    // If not found as a group, check if this is a clip that belongs to a group
+    if (!group) {
+      const clip = allClips.find((c) => c.id === clipOrGroupId);
+      if (clip && clip.groupId) {
+        group = timelineState.groups.find((g) => g.id === clip.groupId);
+        console.log(`🎯 Individual clip selection in expanded group: ${clipOrGroupId}`);
+      }
+    }
+    
+    // Check if we're splitting a specific clip within a group (not the entire group)
+    const isIndividualClipInGroup = group && allClips.find((c) => c.id === clipOrGroupId);
+    
+    if (group && !isIndividualClipInGroup) {
       // This is a group - split all clips in the group within the selected range
       console.log(`   📋 Group split: ${group.name} (${group.clipIds.length} clips)`);
       console.log(`   🎯 Range: ${startOffset.toFixed(2)}s - ${endOffset.toFixed(2)}s`);
@@ -3142,7 +3153,7 @@ export default function InteractiveTrackEditor({
       const newAudioSegments: AudioTrackSegment[] = [];
       
       // Process each clip in the group
-      groupClips.forEach(clip => {
+      groupClips.forEach((clip: TimelineClip) => {
         // Check if this clip intersects with the selected range
         if (clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime) {
           // Calculate relative offsets within this clip
@@ -3413,15 +3424,24 @@ export default function InteractiveTrackEditor({
       return;
     }
     
-    // This is an individual clip
+    // This is an individual clip (could be in a group or standalone)
     const clip = allClips.find((c) => c.id === clipOrGroupId);
     if (!clip) {
       console.error(`❌ Clip ${clipOrGroupId} not found for split operation`);
       return;
     }
+
+    // Log if this clip is part of a group
+    if (isIndividualClipInGroup && group) {
+      console.log(`   📋 Individual clip in group split: ${clip.name} in group ${group.name}`);
+      console.log(`   🎯 Processing as individual clip while maintaining group membership`);
+    }
     
-    console.log(`   📋 Individual clip split: ${clip.name}`);
-    console.log(`   This will create THREE clips: before, selected, and after`);
+    // Check if this is a point split (zero-width range) or a range split
+    const isPointSplit = Math.abs(endOffset - startOffset) < 0.001; // Very small tolerance for floating point comparison
+    
+    console.log(`   📋 Individual clip ${isPointSplit ? 'point split' : 'range split'}: ${clip.name}`);
+    console.log(`   ${isPointSplit ? 'This will create TWO clips: before and after' : 'This will create THREE clips: before, selected, and after'}`);
 
     console.log(`   📋 Original clip: duration=${clip.duration.toFixed(2)}s, sourceStart=${clip.sourceStartOffset.toFixed(2)}s`);
 
@@ -3438,139 +3458,243 @@ export default function InteractiveTrackEditor({
       const sampleRate = audioTrack.sampleRate;
       const originalData = audioTrack.channelData;
 
-      // First segment (before the selected range)
-      if (startOffset > 0) {
+      if (isPointSplit) {
+        // Point split: create two clips at the split point
+        const splitPoint = startOffset; // For point splits, startOffset == endOffset
+        
+        // First segment (before the split point)
+        if (splitPoint > 0) {
+          const sourceStartSample = Math.floor(clip.sourceStartOffset * sampleRate);
+          const firstSegmentEndSample = sourceStartSample + Math.floor(splitPoint * sampleRate);
+          const firstSegmentData = originalData.slice(sourceStartSample, firstSegmentEndSample);
+          const firstWaveform = generateWaveformFromAudio(firstSegmentData, sampleRate);
+          
+          const beforeClipId = `${clip.id}-before-${Date.now()}`;
+          const beforeClip = {
+            ...clip,
+            id: beforeClipId,
+            endTime: clip.startTime + splitPoint,
+            duration: splitPoint,
+            selected: false,
+            waveformData: firstWaveform,
+            waveformColor: clip.waveformColor,
+            sourceStartOffset: clip.sourceStartOffset,
+          };
+          newClips.push(beforeClip);
+          
+          newAudioSegments.push({
+            clipId: beforeClipId,
+            startTime: beforeClip.startTime,
+            duration: beforeClip.duration,
+            audioData: firstSegmentData
+          });
+          
+          console.log(`   📦 Created BEFORE segment: duration=${splitPoint.toFixed(2)}s, sourceStart=${clip.sourceStartOffset.toFixed(2)}s`);
+        }
+
+        // Second segment (after the split point)
+        if (splitPoint < clip.duration) {
+          const sourceStartSample = Math.floor(clip.sourceStartOffset * sampleRate);
+          const afterSegmentStartSample = sourceStartSample + Math.floor(splitPoint * sampleRate);
+          const afterSegmentEndSample = sourceStartSample + Math.floor(clip.duration * sampleRate);
+          const afterSegmentData = originalData.slice(afterSegmentStartSample, afterSegmentEndSample);
+          const afterWaveform = generateWaveformFromAudio(afterSegmentData, sampleRate);
+          
+          const afterClipId = `${clip.id}-after-${Date.now()}`;
+          const afterClip = {
+            ...clip,
+            id: afterClipId,
+            startTime: clip.startTime + splitPoint,
+            endTime: clip.endTime,
+            duration: clip.duration - splitPoint,
+            selected: true, // Select the after clip for point splits
+            waveformData: afterWaveform,
+            waveformColor: clip.waveformColor,
+            sourceStartOffset: clip.sourceStartOffset + splitPoint,
+          };
+          newClips.push(afterClip);
+          
+          newAudioSegments.push({
+            clipId: afterClipId,
+            startTime: afterClip.startTime,
+            duration: afterClip.duration,
+            audioData: afterSegmentData
+          });
+          
+          console.log(`   📦 Created AFTER segment: duration=${(clip.duration - splitPoint).toFixed(2)}s, sourceStart=${(clip.sourceStartOffset + splitPoint).toFixed(2)}s`);
+        }
+        
+        console.log(`   🎵 Created ${newAudioSegments.length} audio segments for point split`);
+      } else {
+        // Range split: create three clips (before, selected, after)
+        
+        // First segment (before the selected range)
+        if (startOffset > 0) {
+          const sourceStartSample = Math.floor(clip.sourceStartOffset * sampleRate);
+          const firstSegmentEndSample = sourceStartSample + Math.floor(startOffset * sampleRate);
+          const firstSegmentData = originalData.slice(sourceStartSample, firstSegmentEndSample);
+          const firstWaveform = generateWaveformFromAudio(firstSegmentData, sampleRate);
+          
+          const beforeClipId = `${clip.id}-before-${Date.now()}`;
+          const beforeClip = {
+            ...clip,
+            id: beforeClipId,
+            endTime: clip.startTime + startOffset,
+            duration: startOffset,
+            selected: false,
+            waveformData: firstWaveform,
+            waveformColor: clip.waveformColor,
+            sourceStartOffset: clip.sourceStartOffset,
+          };
+          newClips.push(beforeClip);
+          
+          newAudioSegments.push({
+            clipId: beforeClipId,
+            startTime: beforeClip.startTime,
+            duration: beforeClip.duration,
+            audioData: firstSegmentData
+          });
+          
+          console.log(`   📦 Created BEFORE segment: duration=${startOffset.toFixed(2)}s, sourceStart=${clip.sourceStartOffset.toFixed(2)}s`);
+        }
+
+        // Second segment (the selected range itself)
         const sourceStartSample = Math.floor(clip.sourceStartOffset * sampleRate);
-        const firstSegmentEndSample = sourceStartSample + Math.floor(startOffset * sampleRate);
-        const firstSegmentData = originalData.slice(sourceStartSample, firstSegmentEndSample);
-        const firstWaveform = generateWaveformFromAudio(firstSegmentData, sampleRate);
+        const selectedSegmentStartSample = sourceStartSample + Math.floor(startOffset * sampleRate);
+        const selectedSegmentEndSample = sourceStartSample + Math.floor(endOffset * sampleRate);
+        const selectedSegmentData = originalData.slice(selectedSegmentStartSample, selectedSegmentEndSample);
+        const selectedWaveform = generateWaveformFromAudio(selectedSegmentData, sampleRate);
         
-        const beforeClipId = `${clip.id}-before-${Date.now()}`;
-        const beforeClip = {
+        const selectedClipId = `${clip.id}-selected-${Date.now()}`;
+        const selectedClip = {
           ...clip,
-          id: beforeClipId,
-          endTime: clip.startTime + startOffset,
-          duration: startOffset,
-          selected: false,
-          waveformData: firstWaveform,
+          id: selectedClipId,
+          startTime: clip.startTime + startOffset,
+          endTime: clip.startTime + endOffset,
+          duration: endOffset - startOffset,
+          selected: true,
+          waveformData: selectedWaveform,
           waveformColor: clip.waveformColor,
-          sourceStartOffset: clip.sourceStartOffset,
+          sourceStartOffset: clip.sourceStartOffset + startOffset,
         };
-        newClips.push(beforeClip);
+        newClips.push(selectedClip);
         
         newAudioSegments.push({
-          clipId: beforeClipId,
-          startTime: beforeClip.startTime,
-          duration: beforeClip.duration,
-          audioData: firstSegmentData
+          clipId: selectedClipId,
+          startTime: selectedClip.startTime,
+          duration: selectedClip.duration,
+          audioData: selectedSegmentData
         });
         
-        console.log(`   📦 Created BEFORE segment: duration=${startOffset.toFixed(2)}s, sourceStart=${clip.sourceStartOffset.toFixed(2)}s`);
-      }
+        console.log(`   📦 Created SELECTED segment: duration=${(endOffset - startOffset).toFixed(2)}s, sourceStart=${(clip.sourceStartOffset + startOffset).toFixed(2)}s`);
 
-      // Second segment (the selected range itself)
-      const sourceStartSample = Math.floor(clip.sourceStartOffset * sampleRate);
-      const selectedSegmentStartSample = sourceStartSample + Math.floor(startOffset * sampleRate);
-      const selectedSegmentEndSample = sourceStartSample + Math.floor(endOffset * sampleRate);
-      const selectedSegmentData = originalData.slice(selectedSegmentStartSample, selectedSegmentEndSample);
-      const selectedWaveform = generateWaveformFromAudio(selectedSegmentData, sampleRate);
-      
-      const selectedClipId = `${clip.id}-selected-${Date.now()}`;
-      const selectedClip = {
-        ...clip,
-        id: selectedClipId,
-        startTime: clip.startTime + startOffset,
-        endTime: clip.startTime + endOffset,
-        duration: endOffset - startOffset,
-        selected: true,
-        waveformData: selectedWaveform,
-        waveformColor: clip.waveformColor,
-        sourceStartOffset: clip.sourceStartOffset + startOffset,
-      };
-      newClips.push(selectedClip);
-      
-      newAudioSegments.push({
-        clipId: selectedClipId,
-        startTime: selectedClip.startTime,
-        duration: selectedClip.duration,
-        audioData: selectedSegmentData
-      });
-      
-      console.log(`   📦 Created SELECTED segment: duration=${(endOffset - startOffset).toFixed(2)}s, sourceStart=${(clip.sourceStartOffset + startOffset).toFixed(2)}s`);
-
-      // Third segment (after the selected range)
-      if (endOffset < clip.duration) {
-        const secondSegmentStartSample = sourceStartSample + Math.floor(endOffset * sampleRate);
-        const secondSegmentEndSample = sourceStartSample + Math.floor(clip.duration * sampleRate);
-        const secondSegmentData = originalData.slice(secondSegmentStartSample, secondSegmentEndSample);
-        const secondWaveform = generateWaveformFromAudio(secondSegmentData, sampleRate);
+        // Third segment (after the selected range)
+        if (endOffset < clip.duration) {
+          const secondSegmentStartSample = sourceStartSample + Math.floor(endOffset * sampleRate);
+          const secondSegmentEndSample = sourceStartSample + Math.floor(clip.duration * sampleRate);
+          const secondSegmentData = originalData.slice(secondSegmentStartSample, secondSegmentEndSample);
+          const secondWaveform = generateWaveformFromAudio(secondSegmentData, sampleRate);
+          
+          const afterClipId = `${clip.id}-after-${Date.now()}`;
+          const afterClip = {
+            ...clip,
+            id: afterClipId,
+            startTime: clip.startTime + endOffset,
+            endTime: clip.endTime,
+            duration: clip.duration - endOffset,
+            selected: false,
+            waveformData: secondWaveform,
+            waveformColor: clip.waveformColor,
+            sourceStartOffset: clip.sourceStartOffset + endOffset,
+          };
+          newClips.push(afterClip);
+          
+          newAudioSegments.push({
+            clipId: afterClipId,
+            startTime: afterClip.startTime,
+            duration: afterClip.duration,
+            audioData: secondSegmentData
+          });
+          
+          console.log(`   📦 Created AFTER segment: duration=${(clip.duration - endOffset).toFixed(2)}s, sourceStart=${(clip.sourceStartOffset + endOffset).toFixed(2)}s`);
+        }
         
-        const afterClipId = `${clip.id}-after-${Date.now()}`;
-        const afterClip = {
-          ...clip,
-          id: afterClipId,
-          startTime: clip.startTime + endOffset,
-          endTime: clip.endTime,
-          duration: clip.duration - endOffset,
-          selected: false,
-          waveformData: secondWaveform,
-          waveformColor: clip.waveformColor,
-          sourceStartOffset: clip.sourceStartOffset + endOffset,
-        };
-        newClips.push(afterClip);
-        
-        newAudioSegments.push({
-          clipId: afterClipId,
-          startTime: afterClip.startTime,
-          duration: afterClip.duration,
-          audioData: secondSegmentData
-        });
-        
-        console.log(`   📦 Created AFTER segment: duration=${(clip.duration - endOffset).toFixed(2)}s, sourceStart=${(clip.sourceStartOffset + endOffset).toFixed(2)}s`);
+        console.log(`   🎵 Created ${newAudioSegments.length} audio segments for range split`);
       }
-      
-      console.log(`   🎵 Created ${newAudioSegments.length} audio segments for split clips`);
     } else {
       // Fallback for clips without audio data
       console.log(`   ⚠️ No audio data found for ${clip.name}, creating clips without audio segments`);
       
-      if (startOffset > 0) {
+      if (isPointSplit) {
+        // Point split: create two clips at the split point
+        const splitPoint = startOffset;
+        
+        if (splitPoint > 0) {
+          newClips.push({
+            ...clip,
+            id: `${clip.id}-before-${Date.now()}`,
+            endTime: clip.startTime + splitPoint,
+            duration: splitPoint,
+            selected: false,
+            waveformData: clip.waveformData,
+            waveformColor: clip.waveformColor,
+            sourceStartOffset: clip.sourceStartOffset,
+          });
+        }
+
+        if (splitPoint < clip.duration) {
+          newClips.push({
+            ...clip,
+            id: `${clip.id}-after-${Date.now()}`,
+            startTime: clip.startTime + splitPoint,
+            endTime: clip.endTime,
+            duration: clip.duration - splitPoint,
+            selected: true, // Select the after clip for point splits
+            waveformData: clip.waveformData,
+            waveformColor: clip.waveformColor,
+            sourceStartOffset: clip.sourceStartOffset + splitPoint,
+          });
+        }
+      } else {
+        // Range split: create three clips
+        if (startOffset > 0) {
+          newClips.push({
+            ...clip,
+            id: `${clip.id}-before-${Date.now()}`,
+            endTime: clip.startTime + startOffset,
+            duration: startOffset,
+            selected: false,
+            waveformData: clip.waveformData,
+            waveformColor: clip.waveformColor,
+            sourceStartOffset: clip.sourceStartOffset,
+          });
+        }
+
         newClips.push({
           ...clip,
-          id: `${clip.id}-before-${Date.now()}`,
-          endTime: clip.startTime + startOffset,
-          duration: startOffset,
-          selected: false,
+          id: `${clip.id}-selected-${Date.now()}`,
+          startTime: clip.startTime + startOffset,
+          endTime: clip.startTime + endOffset,
+          duration: endOffset - startOffset,
+          selected: true,
           waveformData: clip.waveformData,
           waveformColor: clip.waveformColor,
-          sourceStartOffset: clip.sourceStartOffset,
+          sourceStartOffset: clip.sourceStartOffset + startOffset,
         });
-      }
 
-      newClips.push({
-        ...clip,
-        id: `${clip.id}-selected-${Date.now()}`,
-        startTime: clip.startTime + startOffset,
-        endTime: clip.startTime + endOffset,
-        duration: endOffset - startOffset,
-        selected: true,
-        waveformData: clip.waveformData,
-        waveformColor: clip.waveformColor,
-        sourceStartOffset: clip.sourceStartOffset + startOffset,
-      });
-
-      if (endOffset < clip.duration) {
-        newClips.push({
-          ...clip,
-          id: `${clip.id}-after-${Date.now()}`,
-          startTime: clip.startTime + endOffset,
-          endTime: clip.endTime,
-          duration: clip.duration - endOffset,
-          selected: false,
-          waveformData: clip.waveformData,
-          waveformColor: clip.waveformColor,
-          sourceStartOffset: clip.sourceStartOffset + endOffset,
-        });
+        if (endOffset < clip.duration) {
+          newClips.push({
+            ...clip,
+            id: `${clip.id}-after-${Date.now()}`,
+            startTime: clip.startTime + endOffset,
+            endTime: clip.endTime,
+            duration: clip.duration - endOffset,
+            selected: false,
+            waveformData: clip.waveformData,
+            waveformColor: clip.waveformColor,
+            sourceStartOffset: clip.sourceStartOffset + endOffset,
+          });
+        }
       }
     }
 
@@ -3603,6 +3727,30 @@ export default function InteractiveTrackEditor({
         }),
       }));
 
+      // Update groups if the clip belongs to a group
+      let updatedGroups = prev.groups;
+      if (clip.groupId) {
+        updatedGroups = prev.groups.map(g => {
+          if (g.id === clip.groupId) {
+            // Replace the old clip ID with the new clip IDs
+            const updatedClipIds = g.clipIds.flatMap(clipId => {
+              if (clipId === clip.id) {
+                return newClips.map(newClip => newClip.id);
+              }
+              return clipId;
+            });
+            
+            console.log(`🔄 Updating group ${g.id} clipIds: removing ${clip.id}, adding ${newClips.map(c => c.id).join(', ')}`);
+            
+            return {
+              ...g,
+              clipIds: updatedClipIds
+            };
+          }
+          return g;
+        });
+      }
+
       // Recalculate timeline duration
       const newDuration = calculateTimelineDuration(updatedTracks);
 
@@ -3612,6 +3760,7 @@ export default function InteractiveTrackEditor({
       return {
         ...prev,
         tracks: updatedTracks,
+        groups: updatedGroups,
         selectedClips: selectedClipId ? [selectedClipId] : [],
         totalDuration: newDuration,
       };
@@ -3619,7 +3768,7 @@ export default function InteractiveTrackEditor({
     
     // Clear the range selection after split
     setRangeSelection(null);
-  }, [audioTracks, timelineState.tracks, generateWaveformFromAudio, calculateTimelineDuration]);
+  }, [audioTracks, generateWaveformFromAudio, calculateTimelineDuration]);
 
   // Helper function for individual clip range deletion
   const deleteRangeFromClip = useCallback((clip: TimelineClip, startOffset: number, endOffset: number) => {
@@ -3715,7 +3864,7 @@ export default function InteractiveTrackEditor({
   const handleRangeDelete = useCallback((clipOrGroupId: string, startOffset: number, endOffset: number) => {
     console.log(`🗑️ Range delete: ${clipOrGroupId} from ${startOffset.toFixed(2)}s to ${endOffset.toFixed(2)}s - creating gap`);
     
-    // Prevent duplicate calls within 100ms
+    // Prevent duplicate calls within 500ms (increased from 100ms)
     const now = Date.now();
     const current = { id: clipOrGroupId, start: startOffset, end: endOffset, timestamp: now };
     
@@ -3723,7 +3872,7 @@ export default function InteractiveTrackEditor({
         lastRangeDeleteRef.current.id === clipOrGroupId &&
         lastRangeDeleteRef.current.start === startOffset &&
         lastRangeDeleteRef.current.end === endOffset &&
-        (now - lastRangeDeleteRef.current.timestamp) < 100) {
+        (now - lastRangeDeleteRef.current.timestamp) < 500) {
       console.log(`⚠️ Duplicate range delete call detected, skipping`);
       return;
     }
@@ -3863,21 +4012,58 @@ export default function InteractiveTrackEditor({
 
     // Update timeline state with new clips
     setTimelineState((prev) => {
+      console.log(`🔄 State update: replacing clip ${originalClip.id} in track ${originalClip.trackId}`);
+      
+      // Preserve groupId and groupTrackIndex if the original clip was grouped
+      const newClipsWithGroupInfo = newClips.map(newClip => ({
+        ...newClip,
+        trackId: originalClip.trackId, // Preserve the original clip's trackId
+        groupId: originalClip.groupId, // Preserve the original clip's groupId
+        groupTrackIndex: originalClip.groupTrackIndex, // Preserve the original clip's groupTrackIndex
+      }));
+      
       const updatedTracks = prev.tracks.map((track) => ({
         ...track,
         clips: track.clips.flatMap((c) => {
           if (c.id !== originalClip.id) return c;
-          console.log(`🔄 Replacing individual clip ${c.id} with ${newClips.length} clips`);
-          return newClips;
+          
+          console.log(`🔄 Replacing clip ${c.id} with ${newClipsWithGroupInfo.length} clips in track ${track.id}`);
+          newClipsWithGroupInfo.forEach((newClip, index) => {
+            console.log(`   ${index + 1}. ${newClip.id}: ${newClip.startTime.toFixed(2)}s - ${newClip.endTime.toFixed(2)}s on track ${newClip.trackId} ${newClip.groupId ? `(group: ${newClip.groupId})` : ''}`);
+          });
+          
+          return newClipsWithGroupInfo;
         }),
       }));
 
+      // Update group clipIds if the original clip was part of a group
+      let updatedGroups = prev.groups;
+      if (originalClip.groupId) {
+        console.log(`🔄 Updating group ${originalClip.groupId} clipIds: removing ${originalClip.id}, adding ${newClipsWithGroupInfo.map(c => c.id).join(', ')}`);
+        updatedGroups = prev.groups.map(group => {
+          if (group.id === originalClip.groupId) {
+            // Replace the original clip ID with the new clip IDs
+            const newClipIds = group.clipIds.flatMap(clipId => 
+              clipId === originalClip.id ? newClipsWithGroupInfo.map(c => c.id) : clipId
+            );
+            return {
+              ...group,
+              clipIds: newClipIds
+            };
+          }
+          return group;
+        });
+      }
+
       // Recalculate timeline duration
       const newDuration = calculateTimelineDuration(updatedTracks);
+      
+      console.log(`✅ State update completed: ${updatedTracks.flatMap(t => t.clips).length} total clips, duration ${newDuration.toFixed(2)}s`);
 
       return {
         ...prev,
         tracks: updatedTracks,
+        groups: updatedGroups,
         selectedClips: [],
         totalDuration: newDuration,
       };
@@ -3904,7 +4090,7 @@ export default function InteractiveTrackEditor({
     
     // Clear the range selection after delete
     setRangeSelection(null);
-  }, [audioTracks, timelineState.tracks, generateWaveformFromAudio, calculateTimelineDuration, deleteRangeFromClip]);
+  }, [audioTracks, generateWaveformFromAudio, calculateTimelineDuration, deleteRangeFromClip]);
 
   // Handle delete operation for multiple clips
   const handleDelete = useCallback(() => {
@@ -6327,10 +6513,11 @@ export default function InteractiveTrackEditor({
                           onClipSelect={(clipId: string, event: React.MouseEvent) => handleClipClick(clipId, event)}
                           onRangeSelect={handleRangeSelect}
                           onClipSplit={(clipId: string, splitPoint: number) => {
-                            const splitDuration = 0.1;
-                            const startOffset = Math.max(0, splitPoint - clip.startTime - splitDuration / 2);
-                            const endOffset = Math.min(clip.duration, splitPoint - clip.startTime + splitDuration / 2);
-                            handleRangeSplit(clipId, startOffset, endOffset);
+                            // Handle split for clips in expanded groups - use point split, not range split
+                            const relativeOffset = splitPoint - clip.startTime;
+                            console.log(`✂️ Point split expanded group clip ${clipId} at ${splitPoint.toFixed(2)}s (offset: ${relativeOffset.toFixed(2)}s)`);
+                            // Use a zero-width range to indicate point split
+                            handleRangeSplit(clipId, relativeOffset, relativeOffset);
                           }}
                           onClipDelete={(clipId: string) => {
                             handleRangeDelete(clipId, 0, clip.duration);
