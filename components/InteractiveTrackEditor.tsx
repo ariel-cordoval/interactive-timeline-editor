@@ -3886,9 +3886,172 @@ export default function InteractiveTrackEditor({
     console.log(`🔍 Range delete analysis: isGroup=${!!group}, groupName=${group?.name}, numClipsInSystem=${allClips.length}`);
     
     if (group) {
-      // This is a group - delete range from all clips in the group within the selected range
-      console.log(`   📋 Group range delete: ${group.name} (${group.clipIds.length} clips)`);
-      console.log(`   🎯 Range: ${startOffset.toFixed(2)}s - ${endOffset.toFixed(2)}s`);
+      // Check if this is a collapsed group - different behavior needed
+      if (group.collapsed) {
+        console.log(`   ✂️ Collapsed group range CUT: ${group.name} (${group.clipIds.length} clips)`);
+        console.log(`   🎯 Range: ${startOffset.toFixed(2)}s - ${endOffset.toFixed(2)}s - will split into two groups`);
+        
+        // Calculate absolute time range
+        const groupClips = allClips.filter(clip => group.clipIds.includes(clip.id));
+        if (groupClips.length === 0) {
+          console.error(`❌ No clips found in group ${clipOrGroupId}`);
+          return;
+        }
+        
+        const groupStartTime = Math.min(...groupClips.map(c => c.startTime));
+        const absoluteStartTime = groupStartTime + startOffset;
+        const absoluteEndTime = groupStartTime + endOffset;
+        const deletedDuration = endOffset - startOffset;
+        
+        console.log(`   🌍 Absolute range: ${absoluteStartTime.toFixed(2)}s - ${absoluteEndTime.toFixed(2)}s (${deletedDuration.toFixed(2)}s deleted)`);
+        
+        // Create new group IDs
+        const timestamp = Date.now() + Math.random() * 1000;
+        const beforeGroupId = `${group.id}-before-${timestamp}`;
+        const afterGroupId = `${group.id}-after-${timestamp}`;
+        
+        const beforeClips: TimelineClip[] = [];
+        const afterClips: TimelineClip[] = [];
+        const newAudioSegments: AudioTrackSegment[] = [];
+        
+        // Process each clip in the group
+        groupClips.forEach(clip => {
+          console.log(`   📋 Processing clip ${clip.name}: ${clip.startTime.toFixed(2)}s - ${clip.endTime.toFixed(2)}s`);
+          
+          // Check which parts of the clip survive the deletion
+          const clipBeforeDeletedRange = clip.startTime < absoluteStartTime;
+          const clipAfterDeletedRange = clip.endTime > absoluteEndTime;
+          const clipIntersectsDeletedRange = clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime;
+          
+          console.log(`   🔍 Clip analysis: before=${clipBeforeDeletedRange}, after=${clipAfterDeletedRange}, intersects=${clipIntersectsDeletedRange}`);
+          
+                     if (clipIntersectsDeletedRange) {
+             // This clip intersects with the deleted range - manually cut it
+             const clipRelativeStart = Math.max(0, absoluteStartTime - clip.startTime);
+             const clipRelativeEnd = Math.min(clip.duration, absoluteEndTime - clip.startTime);
+             
+             console.log(`   ✂️ Cutting clip ${clip.name}: removing ${clipRelativeStart.toFixed(2)}s - ${clipRelativeEnd.toFixed(2)}s`);
+             
+             // Create before part if it exists
+             if (clipRelativeStart > 0) {
+               const beforeClip = {
+                 ...clip,
+                 id: `${clip.id}-before-${timestamp}`,
+                 endTime: clip.startTime + clipRelativeStart,
+                 duration: clipRelativeStart,
+                 groupId: beforeGroupId,
+                 selected: false,
+               };
+               beforeClips.push(beforeClip);
+               console.log(`   📎 Before part: ${beforeClip.startTime.toFixed(2)}s - ${beforeClip.endTime.toFixed(2)}s`);
+             }
+             
+                           // Create after part if it exists - will be repositioned later
+              if (clipRelativeEnd < clip.duration) {
+                const afterClip = {
+                  ...clip,
+                  id: `${clip.id}-after-${timestamp}`,
+                  startTime: clip.startTime + clipRelativeEnd, // Temporary position (will be adjusted)
+                  endTime: clip.endTime,
+                  duration: clip.duration - clipRelativeEnd,
+                  sourceStartOffset: clip.sourceStartOffset + clipRelativeEnd,
+                  groupId: afterGroupId,
+                  selected: false,
+                };
+                afterClips.push(afterClip);
+                console.log(`   📎 After part: ${afterClip.startTime.toFixed(2)}s - ${afterClip.endTime.toFixed(2)}s (will be repositioned)`);
+              }
+           } else if (clip.endTime <= absoluteStartTime) {
+            // Clip is entirely before the deleted range
+            beforeClips.push({
+              ...clip,
+              groupId: beforeGroupId,
+            });
+                     } else if (clip.startTime >= absoluteEndTime) {
+             // Clip is entirely after the deleted range - add to after group (will be repositioned)
+             const afterClip = {
+               ...clip,
+               groupId: afterGroupId,
+             };
+             afterClips.push(afterClip);
+             console.log(`   📎 Whole clip after range: ${afterClip.startTime.toFixed(2)}s - ${afterClip.endTime.toFixed(2)}s (will be repositioned)`);
+           }
+        });
+        
+                 console.log(`   ✂️ Cut result: ${beforeClips.length} clips before, ${afterClips.length} clips after`);
+         
+         // Calculate where the "after" group should be positioned (immediately after "before" group)
+         const beforeGroupEndTime = beforeClips.length > 0 ? Math.max(...beforeClips.map(c => c.endTime)) : groupStartTime;
+         
+         // Adjust "after" clips to be positioned immediately after "before" group
+         const adjustedAfterClips = afterClips.map(clip => ({
+           ...clip,
+           startTime: beforeGroupEndTime + (clip.startTime - absoluteStartTime),
+           endTime: beforeGroupEndTime + (clip.endTime - absoluteStartTime),
+         }));
+         
+         console.log(`   📍 Positioning: before group ends at ${beforeGroupEndTime.toFixed(2)}s, after group starts at ${beforeGroupEndTime.toFixed(2)}s`);
+         
+         // Update timeline state with new groups
+         setTimelineState((prev) => {
+                     const updatedTracks = prev.tracks.map((track) => ({
+             ...track,
+             clips: track.clips.flatMap((c) => {
+               if (group.clipIds.includes(c.id)) {
+                 // Replace clips in the original group with clips from new groups
+                 return [
+                   ...beforeClips.filter(clip => clip.trackId === c.trackId),
+                   ...adjustedAfterClips.filter(clip => clip.trackId === c.trackId)
+                 ];
+               }
+               return c;
+             }),
+           }));
+ 
+           // Create new groups
+           const newGroups = prev.groups.filter(g => g.id !== group.id);
+           
+           if (beforeClips.length > 0) {
+             newGroups.push({
+               id: beforeGroupId,
+               name: `${group.name} (Part 1)`,
+               clipIds: beforeClips.map(c => c.id),
+               collapsed: true, // Keep collapsed
+               color: group.color,
+               trackId: group.trackId,
+             });
+           }
+           
+           if (adjustedAfterClips.length > 0) {
+             newGroups.push({
+               id: afterGroupId,
+               name: `${group.name} (Part 2)`,
+               clipIds: adjustedAfterClips.map(c => c.id),
+               collapsed: true, // Keep collapsed
+               color: group.color,
+               trackId: group.trackId,
+             });
+           }
+
+          const newDuration = calculateTimelineDuration(updatedTracks);
+
+          return {
+            ...prev,
+            tracks: updatedTracks,
+            groups: newGroups,
+            selectedClips: [], // Clear selection after cut
+            totalDuration: newDuration,
+          };
+        });
+        
+        // Clear the range selection after cut
+        setRangeSelection(null);
+        return;
+      }
+      
+      // This is an expanded group - use the original gap-creating behavior
+      console.log(`   📋 Expanded group range delete: ${group.name} (${group.clipIds.length} clips)`);
+      console.log(`   🎯 Range: ${startOffset.toFixed(2)}s - ${endOffset.toFixed(2)}s - will create gaps`);
       
       // Calculate absolute time range
       const groupClips = allClips.filter(clip => group.clipIds.includes(clip.id));
