@@ -3914,18 +3914,21 @@ export default function InteractiveTrackEditor({
         const afterClips: TimelineClip[] = [];
         const newAudioSegments: AudioTrackSegment[] = [];
         
-        // Process each clip in the group
-        groupClips.forEach(clip => {
-          console.log(`   📋 Processing clip ${clip.name}: ${clip.startTime.toFixed(2)}s - ${clip.endTime.toFixed(2)}s`);
-          
-          // Check which parts of the clip survive the deletion
-          const clipBeforeDeletedRange = clip.startTime < absoluteStartTime;
-          const clipAfterDeletedRange = clip.endTime > absoluteEndTime;
-          const clipIntersectsDeletedRange = clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime;
-          
-          console.log(`   🔍 Clip analysis: before=${clipBeforeDeletedRange}, after=${clipAfterDeletedRange}, intersects=${clipIntersectsDeletedRange}`);
-          
-                     if (clipIntersectsDeletedRange) {
+                 // Process each clip in the group
+         groupClips.forEach((clip, clipIndex) => {
+           console.log(`   📋 Processing clip ${clip.name}: ${clip.startTime.toFixed(2)}s - ${clip.endTime.toFixed(2)}s`);
+           
+           // Create unique timestamp for this specific clip
+           const clipTimestamp = timestamp + clipIndex;
+           
+           // Check which parts of the clip survive the deletion
+           const clipBeforeDeletedRange = clip.startTime < absoluteStartTime;
+           const clipAfterDeletedRange = clip.endTime > absoluteEndTime;
+           const clipIntersectsDeletedRange = clip.endTime > absoluteStartTime && clip.startTime < absoluteEndTime;
+           
+           console.log(`   🔍 Clip analysis: before=${clipBeforeDeletedRange}, after=${clipAfterDeletedRange}, intersects=${clipIntersectsDeletedRange}`);
+           
+           if (clipIntersectsDeletedRange) {
              // This clip intersects with the deleted range - manually cut it
              const clipRelativeStart = Math.max(0, absoluteStartTime - clip.startTime);
              const clipRelativeEnd = Math.min(clip.duration, absoluteEndTime - clip.startTime);
@@ -3936,47 +3939,48 @@ export default function InteractiveTrackEditor({
              if (clipRelativeStart > 0) {
                const beforeClip = {
                  ...clip,
-                 id: `${clip.id}-before-${timestamp}`,
+                 id: `${clip.id}-before-${clipTimestamp}`,
                  endTime: clip.startTime + clipRelativeStart,
                  duration: clipRelativeStart,
                  groupId: beforeGroupId,
                  selected: false,
                };
                beforeClips.push(beforeClip);
-               console.log(`   📎 Before part: ${beforeClip.startTime.toFixed(2)}s - ${beforeClip.endTime.toFixed(2)}s`);
+               console.log(`   📎 Before part: ${beforeClip.id}, ${beforeClip.startTime.toFixed(2)}s - ${beforeClip.endTime.toFixed(2)}s`);
              }
              
-                           // Create after part if it exists - will be repositioned later
-              if (clipRelativeEnd < clip.duration) {
-                const afterClip = {
-                  ...clip,
-                  id: `${clip.id}-after-${timestamp}`,
-                  startTime: clip.startTime + clipRelativeEnd, // Temporary position (will be adjusted)
-                  endTime: clip.endTime,
-                  duration: clip.duration - clipRelativeEnd,
-                  sourceStartOffset: clip.sourceStartOffset + clipRelativeEnd,
-                  groupId: afterGroupId,
-                  selected: false,
-                };
-                afterClips.push(afterClip);
-                console.log(`   📎 After part: ${afterClip.startTime.toFixed(2)}s - ${afterClip.endTime.toFixed(2)}s (will be repositioned)`);
-              }
+             // Create after part if it exists - will be repositioned later
+             if (clipRelativeEnd < clip.duration) {
+               const afterClip = {
+                 ...clip,
+                 id: `${clip.id}-after-${clipTimestamp}`,
+                 startTime: clip.startTime + clipRelativeEnd, // Temporary position (will be adjusted)
+                 endTime: clip.endTime,
+                 duration: clip.duration - clipRelativeEnd,
+                 sourceStartOffset: clip.sourceStartOffset + clipRelativeEnd,
+                 groupId: afterGroupId,
+                 selected: false,
+               };
+               afterClips.push(afterClip);
+               console.log(`   📎 After part: ${afterClip.id}, ${afterClip.startTime.toFixed(2)}s - ${afterClip.endTime.toFixed(2)}s (will be repositioned)`);
+             }
            } else if (clip.endTime <= absoluteStartTime) {
-            // Clip is entirely before the deleted range
-            beforeClips.push({
-              ...clip,
-              groupId: beforeGroupId,
-            });
-                     } else if (clip.startTime >= absoluteEndTime) {
+             // Clip is entirely before the deleted range
+             beforeClips.push({
+               ...clip,
+               groupId: beforeGroupId,
+             });
+             console.log(`   📎 Whole clip before range: ${clip.id}, ${clip.startTime.toFixed(2)}s - ${clip.endTime.toFixed(2)}s`);
+           } else if (clip.startTime >= absoluteEndTime) {
              // Clip is entirely after the deleted range - add to after group (will be repositioned)
              const afterClip = {
                ...clip,
                groupId: afterGroupId,
              };
              afterClips.push(afterClip);
-             console.log(`   📎 Whole clip after range: ${afterClip.startTime.toFixed(2)}s - ${afterClip.endTime.toFixed(2)}s (will be repositioned)`);
+             console.log(`   📎 Whole clip after range: ${afterClip.id}, ${afterClip.startTime.toFixed(2)}s - ${afterClip.endTime.toFixed(2)}s (will be repositioned)`);
            }
-        });
+         });
         
                  console.log(`   ✂️ Cut result: ${beforeClips.length} clips before, ${afterClips.length} clips after`);
          
