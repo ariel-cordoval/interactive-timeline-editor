@@ -34,6 +34,7 @@ interface InteractiveControlsProps {
   onClearRangeSelection: () => void;
   onCopy: () => void;
   onPaste?: () => void;
+  onDuplicate?: () => void;
   hasClipboardData: boolean;
 }
 
@@ -56,9 +57,10 @@ const InteractiveControls: React.FC<InteractiveControlsProps> = ({
   onRangeSplit,
   onRangeDelete,
   onClearRangeSelection,
-  onCopy: _onCopy, // Renamed to indicate intentionally unused
-  onPaste: _onPaste, // Renamed to indicate intentionally unused
-  hasClipboardData: _hasClipboardData, // Renamed to indicate intentionally unused
+  onCopy,
+  onPaste,
+  onDuplicate,
+  hasClipboardData
 }) => {
   const formatTime = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);
@@ -133,13 +135,37 @@ const InteractiveControls: React.FC<InteractiveControlsProps> = ({
             <Button
               variant="ghost"
               size="sm"
-              onClick={_onCopy}
+              onClick={onCopy}
               className="h-8 px-3 text-white hover:bg-[#2a2a2a] text-xs"
               title="Copy selection (Cmd+C)"
-              disabled={!_onCopy}
+              disabled={!onCopy}
             >
               📋 Copy
             </Button>
+            
+            {onDuplicate && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onDuplicate}
+                className="h-8 px-3 text-white hover:bg-[#2a2a2a] text-xs"
+                title="Duplicate selection (Cmd+D)"
+              >
+                📋+ Duplicate
+              </Button>
+            )}
+            
+            {hasClipboardData && onPaste && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onPaste}
+                className="h-8 px-3 text-white hover:bg-[#2a2a2a] text-xs"
+                title="Paste (Cmd+V)"
+              >
+                📄 Paste
+              </Button>
+            )}
             
             <Button
               variant="ghost"

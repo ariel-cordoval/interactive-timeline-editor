@@ -1264,6 +1264,7 @@ interface InteractiveControlsProps {
   onClearRangeSelection: () => void;
   onCopy: () => void;
   onPaste: () => void;
+  onDuplicate: () => void;
   hasClipboardData: boolean;
 }
 
@@ -1286,9 +1287,10 @@ function InteractiveControls({
   onRangeSplit,
   onRangeDelete,
   onClearRangeSelection,
-  onCopy: _onCopy, // Renamed to indicate intentionally unused
-  onPaste: _onPaste, // Renamed to indicate intentionally unused
-  hasClipboardData: _hasClipboardData, // Renamed to indicate intentionally unused
+  onCopy,
+  onPaste,
+  onDuplicate,
+  hasClipboardData
 }: InteractiveControlsProps) {
   const formatTime = (seconds: number) => {
     const minutes = Math.floor(seconds / 60);
@@ -6396,7 +6398,51 @@ export default function InteractiveTrackEditor({
          console.log(`✅ Pasted clip ${newClipId} at ${pasteTime.toFixed(2)}s`);
    }, [clipboardData, timelineState.playheadPosition, timelineState.tracks, calculateTimelineDuration]);
 
+  // Handle duplicate operation (Copy + Paste in one action)
+  const handleDuplicate = useCallback(() => {
+    if (!rangeSelection) {
+      console.log('📋+ No range selected to duplicate');
+      return;
+    }
 
+    console.log('📋+ Duplicating range...');
+    
+    // First copy the current selection
+    handleCopy();
+    
+    // Then paste it at the end of the selection
+    setTimeout(() => {
+      const originalClip = timelineState.tracks
+        .flatMap(track => track.clips)
+        .find(c => c.id === rangeSelection.clipId);
+      
+      if (originalClip) {
+        const duplicateStartTime = originalClip.startTime + rangeSelection.endOffset;
+        
+        // Temporarily move playhead to duplicate position
+        const originalPlayheadPosition = timelineState.playheadPosition;
+        setTimelineState(prev => ({
+          ...prev,
+          playheadPosition: duplicateStartTime
+        }));
+        
+        // Paste the duplicate
+        setTimeout(() => {
+          handlePaste();
+          
+          // Restore original playhead position
+          setTimeout(() => {
+            setTimelineState(prev => ({
+              ...prev,
+              playheadPosition: originalPlayheadPosition
+            }));
+          }, 10);
+        }, 10);
+      }
+    }, 10);
+    
+    console.log('📋+ Duplicate operation completed');
+  }, [rangeSelection, handleCopy, handlePaste, timelineState.playheadPosition, timelineState.tracks]);
 
   // Simple test instructions
 
@@ -6431,6 +6477,7 @@ export default function InteractiveTrackEditor({
         onClearRangeSelection={clearRangeSelection}
         onCopy={handleCopy}
         onPaste={handlePaste}
+        onDuplicate={handleDuplicate}
         hasClipboardData={clipboardData !== null}
       />
 
