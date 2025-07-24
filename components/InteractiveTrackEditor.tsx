@@ -1928,6 +1928,13 @@ export default function InteractiveTrackEditor({
     }
   }, [smoothZoom, timelineState.totalDuration, showZoomHint, viewportOffset]);
 
+  // Auto-focus the container for keyboard shortcuts
+  useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.focus();
+    }
+  }, []);
+
   // Load default audio files on component mount
   useEffect(() => {
     const loadDefaults = async () => {
@@ -5655,103 +5662,118 @@ export default function InteractiveTrackEditor({
           }
         }
 
-        // Update timeline state for visual feedback - move all selected clips maintaining track relationships
+        // Update timeline state for visual feedback - properly handle track changes
         setTimelineState((prev) => {
-          const updatedTracks = prev.tracks.map((track) => ({
-            ...track,
-            clips: track.clips.map((clip) => {
-              if (!dragState.selectedClipIds.includes(clip.id))
-                return clip;
+          // For move operations, we need to handle track changes properly
+          if (dragState.dragType === "move") {
+            // Create a map of clip updates with their target tracks
+            const clipUpdates = new Map<string, { clip: TimelineClip; targetTrackId: string }>();
 
-              const originalClip = dragState.originalClips.find(
-                (c) => c.id === clip.id,
-              );
-              if (!originalClip) return clip;
+            dragState.selectedClipIds.forEach(clipId => {
+              const originalClip = dragState.originalClips.find(c => c.id === clipId);
+              if (!originalClip) return;
 
-              let clipNewStartTime = originalClip.startTime;
-              let clipNewEndTime = originalClip.endTime;
-              let clipTargetTrackId = originalClip.trackId;
+              const trackOffset = dragState.trackOffsets.get(clipId) || 0;
+              const targetTrackIndex = primaryTargetTrackIndex + trackOffset;
+              const targetTrack = getTrackByIndex(targetTrackIndex);
 
-              if (dragState.dragType === "move") {
-                // Simplified drag logic - calculate target track based on track offset
-                const trackOffset = dragState.trackOffsets.get(clip.id) || 0;
-                const targetTrackIndex = primaryTargetTrackIndex + trackOffset;
-                const targetTrack = getTrackByIndex(targetTrackIndex);
+              if (targetTrack) {
+                // Calculate time offset
+                const timeOffset = newStartTime + snapAdjustment - primaryClip.startTime;
+                const clipNewStartTime = Math.max(0, originalClip.startTime + timeOffset);
+                const clipNewEndTime = clipNewStartTime + originalClip.duration;
 
-                if (targetTrack) {
-                  clipTargetTrackId = targetTrack.id;
+                const updatedClip: TimelineClip = {
+                  ...originalClip,
+                  trackId: targetTrack.id,
+                  startTime: clipNewStartTime,
+                  endTime: clipNewEndTime,
+                  selected: true,
+                  waveformData: originalClip.waveformData,
+                  waveformColor: originalClip.waveformColor,
+                };
 
-                  // Calculate time offset
-                  const timeOffset = newStartTime + snapAdjustment - primaryClip.startTime;
-                  clipNewStartTime = Math.max(0, originalClip.startTime + timeOffset);
-                  clipNewEndTime = clipNewStartTime + originalClip.duration;
-                } else {
-                  // Invalid target track - keep original position
-                  clipTargetTrackId = originalClip.trackId;
-                  clipNewStartTime = originalClip.startTime;
-                  clipNewEndTime = originalClip.endTime;
+                clipUpdates.set(clipId, { clip: updatedClip, targetTrackId: targetTrack.id });
+              } else {
+                // Keep in original track if no valid target
+                clipUpdates.set(clipId, { clip: originalClip, targetTrackId: originalClip.trackId });
+              }
+            });
+
+            // Build new tracks array with clips properly distributed
+            const updatedTracks = prev.tracks.map(track => {
+              // Remove dragged clips from all tracks
+              const remainingClips = track.clips.filter(clip => !dragState.selectedClipIds.includes(clip.id));
+
+              // Add clips that belong to this track
+              const clipsForThisTrack = Array.from(clipUpdates.values())
+                .filter(update => update.targetTrackId === track.id)
+                .map(update => update.clip);
+
+              return {
+                ...track,
+                clips: [
+                  ...remainingClips.map(clip => ({
+                    ...clip,
+                    selected: dragState.selectedClipIds.includes(clip.id)
+                  })),
+                  ...clipsForThisTrack
+                ]
+              };
+            });
+
+            return {
+              ...prev,
+              tracks: updatedTracks,
+            };
+          } else {
+            // For trim operations, clips stay in the same track
+            const updatedTracks = prev.tracks.map((track) => ({
+              ...track,
+              clips: track.clips.map((clip) => {
+                if (!dragState.selectedClipIds.includes(clip.id))
+                  return clip;
+
+                const originalClip = dragState.originalClips.find(c => c.id === clip.id);
+                if (!originalClip) return clip;
+
+                if (dragState.dragType === "trim-start" && clip.id === dragState.clipId) {
+                  const clipNewStartTime = newStartTime + snapAdjustment;
+                  const trimAmount = clipNewStartTime - originalClip.startTime;
+                  console.log(`✂️ TRIM START: ${clip.id} by ${trimAmount.toFixed(2)}s, new sourceOffset: ${(originalClip.sourceStartOffset + trimAmount).toFixed(2)}s`);
+                  return {
+                    ...clip,
+                    startTime: clipNewStartTime,
+                    duration: originalClip.endTime - clipNewStartTime,
+                    selected: true,
+                    waveformData: clip.waveformData,
+                    waveformColor: clip.waveformColor,
+                    sourceStartOffset: originalClip.sourceStartOffset + trimAmount,
+                  };
+                } else if (dragState.dragType === "trim-end" && clip.id === dragState.clipId) {
+                  const clipNewEndTime = newEndTime + snapAdjustment;
+                  const trimAmount = originalClip.endTime - clipNewEndTime;
+                  console.log(`✂️ TRIM END: ${clip.id} by ${trimAmount.toFixed(2)}s, duration: ${(clipNewEndTime - originalClip.startTime).toFixed(2)}s`);
+                  return {
+                    ...clip,
+                    endTime: clipNewEndTime,
+                    duration: clipNewEndTime - originalClip.startTime,
+                    selected: true,
+                    waveformData: clip.waveformData,
+                    waveformColor: clip.waveformColor,
+                    sourceStartOffset: originalClip.sourceStartOffset,
+                  };
                 }
 
-                // Keep existing groupTrackIndex
-                let updatedGroupTrackIndex = clip.groupTrackIndex;
+                return clip;
+              }),
+            }));
 
-                return {
-                  ...clip,
-                  trackId: clipTargetTrackId,
-                  startTime: clipNewStartTime,
-                  endTime: clipNewEndTime,
-                  groupTrackIndex: updatedGroupTrackIndex,
-                  selected: true, // Preserve selection state
-                  waveformData: clip.waveformData,
-                  waveformColor: clip.waveformColor,
-                };
-              } else if (
-                dragState.dragType === "trim-start" &&
-                clip.id === dragState.clipId
-              ) {
-                clipNewStartTime =
-                  newStartTime + snapAdjustment;
-                // Calculate how much we're trimming from the start
-                const trimAmount = clipNewStartTime - originalClip.startTime;
-                console.log(`✂️ TRIM START: ${clip.id} by ${trimAmount.toFixed(2)}s, new sourceOffset: ${(originalClip.sourceStartOffset + trimAmount).toFixed(2)}s`);
-                return {
-                  ...clip,
-                  startTime: clipNewStartTime,
-                  duration:
-                    originalClip.endTime - clipNewStartTime,
-                  selected: true,
-                  waveformData: clip.waveformData,
-                  waveformColor: clip.waveformColor,
-                  sourceStartOffset: originalClip.sourceStartOffset + trimAmount, // Update source offset
-                };
-              } else if (
-                dragState.dragType === "trim-end" &&
-                clip.id === dragState.clipId
-              ) {
-                clipNewEndTime = newEndTime + snapAdjustment;
-                const trimAmount = originalClip.endTime - clipNewEndTime;
-                console.log(`✂️ TRIM END: ${clip.id} by ${trimAmount.toFixed(2)}s, duration: ${(clipNewEndTime - originalClip.startTime).toFixed(2)}s`);
-                return {
-                  ...clip,
-                  endTime: clipNewEndTime,
-                  duration:
-                    clipNewEndTime - originalClip.startTime,
-                  selected: true,
-                  waveformData: clip.waveformData,
-                  waveformColor: clip.waveformColor,
-                  sourceStartOffset: originalClip.sourceStartOffset, // Keep same source offset for end trim
-                };
-              }
-
-              return clip;
-            }),
-          }));
-
-          return {
-            ...prev,
-            tracks: updatedTracks,
-            // Don't update totalDuration during drag - only when drag is completed
-          };
+            return {
+              ...prev,
+              tracks: updatedTracks,
+            };
+          }
         });
       }
     };
@@ -6201,7 +6223,15 @@ export default function InteractiveTrackEditor({
             targetClipId: null,
           });
         }
-            // Copy/paste handled by dedicated handler below
+      } else if (event.metaKey && event.key === 'c') {
+        event.preventDefault();
+        handleCopy();
+      } else if (event.metaKey && event.key === 'v') {
+        event.preventDefault();
+        handlePaste();
+      } else if (event.metaKey && event.key === 'd') {
+        event.preventDefault();
+        handleDuplicate();
       } else if (event.key === ' ') {
         event.preventDefault();
         handlePlayPause();
@@ -6309,18 +6339,6 @@ export default function InteractiveTrackEditor({
     
     console.log(`📋 Pasting range at playhead: ${pasteTime.toFixed(2)}s`);
     
-    // Create new clip from clipboard data
-    const newClip: TimelineClip = {
-      ...clipboardData.originalClip,
-      id: newClipId,
-      startTime: pasteTime,
-      endTime: pasteTime + clipboardData.duration,
-      duration: clipboardData.duration,
-      selected: true, // Select the newly pasted clip
-      waveformData: clipboardData.waveformData || clipboardData.originalClip.waveformData,
-      sourceStartOffset: clipboardData.originalClip.sourceStartOffset + clipboardData.startOffset,
-    };
-
     // Find the best track to place the new clip (avoid overlaps)
     let targetTrackId = clipboardData.originalClip.trackId;
     let canPlaceInOriginalTrack = true;
@@ -6352,28 +6370,80 @@ export default function InteractiveTrackEditor({
       }
     }
 
+    // If no existing track is available, create a new track
     if (!canPlaceInOriginalTrack) {
-      console.log('❌ No available track found for paste operation');
-      return;
+      console.log('🆕 No available track found, creating new track for paste operation');
+      const newTrackId = `track-${Date.now()}`;
+      const newTrackName = `Track ${timelineState.tracks.length + 1}`;
+      
+      // Update the target track to the new track
+      targetTrackId = newTrackId;
+      canPlaceInOriginalTrack = true;
+      
+      // We'll add the new track in the state update below
+      console.log(`✅ Will create new track: ${newTrackName}`);
     }
+
+    // Create new clip from clipboard data (after determining target track)
+    const newClip: TimelineClip = {
+      ...clipboardData.originalClip,
+      id: newClipId,
+      trackId: targetTrackId,
+      startTime: pasteTime,
+      endTime: pasteTime + clipboardData.duration,
+      duration: clipboardData.duration,
+      selected: true, // Select the newly pasted clip
+      waveformData: clipboardData.waveformData || clipboardData.originalClip.waveformData,
+      sourceStartOffset: clipboardData.originalClip.sourceStartOffset + clipboardData.startOffset,
+    };
 
     // Update timeline state
     setTimelineState((prev) => {
-      const newTracks = prev.tracks.map(track => {
-        if (track.id === targetTrackId) {
+      // Check if we need to create a new track
+      const existingTrack = prev.tracks.find(t => t.id === targetTrackId);
+      
+      let newTracks;
+      if (existingTrack) {
+        // Add to existing track
+        newTracks = prev.tracks.map(track => {
+          if (track.id === targetTrackId) {
+            return {
+              ...track,
+              clips: [...track.clips, newClip]
+            };
+          }
           return {
             ...track,
-            clips: [...track.clips, newClip]
+            clips: track.clips.map(clip => ({
+              ...clip,
+              selected: false // Deselect other clips
+            }))
           };
-        }
-        return {
-          ...track,
-          clips: track.clips.map(clip => ({
-            ...clip,
-            selected: false // Deselect other clips
-          }))
+        });
+      } else {
+        // Create new track
+        const newTrackName = `Track ${prev.tracks.length + 1}`;
+        const newTrack: TimelineTrack = {
+          id: targetTrackId,
+          name: newTrackName,
+          type: "audio",
+          clips: [newClip],
+          height: 64,
         };
-      });
+        
+        // Add new track and deselect clips in existing tracks
+        newTracks = [
+          ...prev.tracks.map(track => ({
+            ...track,
+            clips: track.clips.map(clip => ({
+              ...clip,
+              selected: false // Deselect other clips
+            }))
+          })),
+          newTrack
+        ];
+        console.log(`🆕 Created new track: ${newTrackName}`);
+      }
 
       return {
         ...prev,
@@ -6454,6 +6524,8 @@ export default function InteractiveTrackEditor({
     <div
       ref={containerRef}
       className="relative w-full h-full bg-[#0e0e0e] flex flex-col select-none"
+      tabIndex={0}
+      style={{ outline: 'none' }}
     >
       {/* Action Bar */}
       <InteractiveControls
